@@ -65,15 +65,15 @@ def main() -> None:
         if name:
             display_to_name[display] = name
 
-    print("\n" + "=" * 80)
-    print(
-        " PuTTY Sessions  (arrows / type to filter / Enter = connect / Esc = quit)"
+    menu_title = (
+        "\n" + "=" * 80 + "\n"
+        " PuTTY Sessions  (arrows / type to filter / Enter = connect / Esc = quit)\n"
+        + "=" * 80
     )
-    print("=" * 80)
 
     terminal_menu = TerminalMenu(
         menu_items,
-        title="Please select a session:",
+        title=menu_title,
         menu_cursor="➜ ",
         menu_cursor_style=("fg_green", "bold"),
         menu_highlight_style=("standout",),
