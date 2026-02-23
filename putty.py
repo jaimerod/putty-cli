@@ -30,9 +30,11 @@ except ImportError:
     sys.exit(1)
 
 # ─── Config ────────────────────────────────────────────────────────────────
-REG_PATH = Path(
-    "/mnt/c/Users/hiiam/OneDrive/Shared/portable/PuTTY/Data/settings/putty.reg"
-).expanduser().resolve()
+if "PUTTY_REG_PATH" not in os.environ:
+    print("Error: PUTTY_REG_PATH environment variable not set.", file=sys.stderr)
+    sys.exit(1)
+
+REG_PATH = Path(os.environ["PUTTY_REG_PATH"]).expanduser().resolve()
 # ───────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
