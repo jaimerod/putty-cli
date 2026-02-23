@@ -31,14 +31,14 @@ def generate_menu_items(
     """
     # Header and items for recent sessions
     if recent_names:
-        yield "── RECENT SESSIONS ──────────────────────────", None
+        yield "── RECENT SESSIONS ──────────────────────────────────────────────────────────────────────────", None
         for name in recent_names:
             if name in sessions:
                 _, display, session_name = make_display_pair(name, sessions[name])
                 yield display, session_name
         # Separator if there are other sessions to show
         if len(sessions) > len(recent_names):
-            yield "─────────────────────────────────────────────", None
+            yield "─────────────────────────────────────────────────────────────────────────────────────────────", None
 
     # Sorted list of all other sessions
     for name in sorted(
