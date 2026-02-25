@@ -1,4 +1,5 @@
 import os
+import shlex
 import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -15,6 +16,16 @@ def build_ssh_command(session_name: str, session: Dict[str, str]) -> Tuple[Optio
     port = session.get("PortNumber", "22")
     if port != "22":
         parts.extend(["-p", port])
+
+    proxy_method = session.get("ProxyMethod", "0").strip()
+    proxy_host = session.get("ProxyHost", "").strip()
+    if proxy_method == "6" and proxy_host:
+        proxy_port = session.get("ProxyPort", "22").strip()
+        proxy_user = session.get("ProxyUsername", "").strip()
+        jump = f"{proxy_user}@{proxy_host}" if proxy_user else proxy_host
+        if proxy_port and proxy_port != "22":
+            jump = f"{jump}:{proxy_port}"
+        parts.extend(["-J", jump])
 
     user = session.get("UserName", "").strip()
     host = session["HostName"].strip()
@@ -68,6 +79,11 @@ def build_ssh_command(session_name: str, session: Dict[str, str]) -> Tuple[Optio
                 print("  → Key conversion failed → will prompt for password")
         else:
             print(f"  → Key file not found: {ppk_file_str}")
+
+    remote_cmd = session.get("RemoteCommand", "").strip()
+    if remote_cmd:
+        parts.insert(1, "-t")
+        parts.append(f'"{remote_cmd}"')
 
     # Build the base SSH command
     base_cmd = " ".join(parts)

@@ -6,12 +6,14 @@ def make_display_pair(name: str, session: Dict[str, str]) -> tuple[str, str, str
     user = unquote_display(session.get("UserName", ""))
     port = session.get("PortNumber", "22")
     keyhint = " 🔑" if "PublicKeyFile" in session and session["PublicKeyFile"].strip() else ""
+    proxyhint = " 🔀" if session.get("ProxyMethod", "0").strip() == "6" and session.get("ProxyHost", "").strip() else ""
+    cmdhint = " ⚡" if session.get("RemoteCommand", "").strip() else ""
     target = f"{user}@" if user else ""
     target += host
     if port != "22":
         target += f":{port}"
     titled_name = smart_title(unquote_display(name))
-    display = f"{titled_name:<45} → {target}{keyhint}"
+    display = f"{titled_name:<45} → {target}{keyhint}{proxyhint}{cmdhint}"
     return (display.lower(), display, name)
 
 
