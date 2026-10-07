@@ -218,6 +218,41 @@ class TestTitlecase:
         assert unquote_display("Plain-Name_1.0") == "Plain-Name_1.0"
 
 
+# ── .env loader ──────────────────────────────────────────────────────────────
+
+class TestDotenv:
+    def test_parse_basic(self):
+        from utils.env_util import _parse_env_file
+        parsed = _parse_env_file(
+            "A=1\n# comment\n\nexport B=2\nC=\"quoted value\"\nD='sq'\nE=\nF=part\n"
+        )
+        assert parsed == {
+            "A": "1", "B": "2", "C": "quoted value",
+            "D": "sq", "E": "", "F": "part",
+        }
+
+    def test_real_env_wins(self, monkeypatch, tmp_path):
+        from utils import env_util
+        f = tmp_path / ".env"
+        f.write_text("PUTTY_TEST_VAR=from_file\n", encoding="utf-8")
+        monkeypatch.setenv("PUTTY_TEST_VAR", "from_env")
+        monkeypatch.setattr(env_util, "_find_env_file", lambda: f)
+        env_util.load_dotenv()
+        import os
+        assert os.environ["PUTTY_TEST_VAR"] == "from_env"
+
+    def test_loads_from_file(self, monkeypatch, tmp_path):
+        from utils import env_util
+        import os
+        f = tmp_path / ".env"
+        f.write_text("PUTTY_TEST_VAR2=from_file\n", encoding="utf-8")
+        monkeypatch.delenv("PUTTY_TEST_VAR2", raising=False)
+        monkeypatch.setattr(env_util, "_find_env_file", lambda: f)
+        path = env_util.load_dotenv()
+        assert path == f
+        assert os.environ["PUTTY_TEST_VAR2"] == "from_file"
+
+
 # ── SSH command building ─────────────────────────────────────────────────────
 
 class TestBuildSshCommand:

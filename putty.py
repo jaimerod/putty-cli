@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from utils.display_util import generate_menu_items
+from utils.env_util import load_dotenv
 from utils.putty_parse_util import parse_putty_reg
 from utils.recent_sessions_util import (load_recent_sessions,
                                         update_recent_sessions)
@@ -38,13 +39,20 @@ def resolve_reg_path() -> Path:
     """
     value = os.environ.get("PUTTY_REG_PATH")
     if not value:
-        print("Error: PUTTY_REG_PATH environment variable not set.", file=sys.stderr)
+        print(
+            "Error: PUTTY_REG_PATH not set.\n"
+            "Copy .env.example to .env and edit it, or export PUTTY_REG_PATH.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return Path(value).expanduser().resolve()
 # ───────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     """Main function to parse sessions, display menu, and handle connection."""
+    dotenv_path = load_dotenv()
+    if dotenv_path is None and "PUTTY_REG_PATH" not in os.environ:
+        print("Note: no .env file found (see .env.example).\n", file=sys.stderr)
     reg_path = resolve_reg_path()
     recent_file = Path.home() / ".putty_recent_sessions"
     try:
