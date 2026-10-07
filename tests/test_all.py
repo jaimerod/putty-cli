@@ -138,10 +138,12 @@ class TestMenuItems:
         items = list(generate_menu_items({"a": {"HostName": "a"}}, []))
         assert all(n is not None for _, n in items)
 
-    def test_separator_not_only_when_all_recent(self):
+    def test_separator_not_when_all_recent(self):
         sessions = {"a": {"HostName": "a"}}
         items = list(generate_menu_items(sessions, ["a"]))
-        assert all(n is not None for _, n in items)
+        displays = [d for d, _ in items]
+        plain_sep = [d for d in displays if d.startswith("──") and "RECENT" not in d]
+        assert not plain_sep
 
 
 # ── Recents ──────────────────────────────────────────────────────────────────
