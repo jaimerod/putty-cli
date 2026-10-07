@@ -1363,3 +1363,74 @@ class TestDynamicSeparator:
         items = list(generate_menu_items(sessions, ["a"]))
         sep = separator("", width=123)
         assert sep in [d for d, _ in items]
+
+
+# ── No-tmux fallback (item 27) ───────────────────────────────────────────────
+
+class TestNoTmuxFallback:
+    def test_auto_falls_back_when_tmux_missing(self, monkeypatch, tmp_path, capsys):
+        """No tmux binary -> bare ssh argv, no log side effects."""
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        argv, tk, tmux_used = putty.build_and_connect(
+            "s", {"HostName": "h.example.com"},
+            tmp_path / "r.reg", use_tmux=None,
+        )
+        assert tmux_used is False
+        assert argv[0] == "ssh"
+        assert not tk
+
+    def test_forced_no_tmux(self, tmp_path):
+        argv, tk, tmux_used = putty.build_and_connect(
+            "s", {"HostName": "h.example.com"},
+            tmp_path / "r.reg", use_tmux=False,
+        )
+        assert argv[0] == "ssh" and tmux_used is False
+
+    def test_tmux_present_uses_tmux(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/tmux")
+        argv, tk, tmux_used = putty.build_and_connect(
+            "s", {"HostName": "h.example.com"},
+            tmp_path / "r.reg", use_tmux=None,
+        )
+        assert tmux_used is True
+        assert argv[0] == "tmux" or argv[:3] == ["tmux", "new-session"]
+
+    def test_no_tmux_flag_reaches_connect(self, monkeypatch, tmp_path):
+        """--no-tmux flag propagates to connect_to_session."""
+        calls = {}
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(putty, "connect_to_session",
+                            lambda *a, **k: calls.update(k) or 0)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            putty.main(["--connect", "prod-db", "--dry-run", "--no-tmux"])
+        assert calls.get("use_tmux") is False
+
+    def test_missing_tmux_error_mentions_tip(self, monkeypatch, tmp_path, capsys):
+        """tmux vanished mid-flight -> error suggests --no-tmux."""
+        import subprocess as sp
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/tmux")
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("tmux")),
+        )
+        rc = putty.connect_to_session(
+            "s", {"HostName": "h.example.com"},
+            tmp_path / "r.reg", tmp_path / "rec", use_tmux=True,
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "--no-tmux" in err
+
+    def test_ssh_failure_recorded_with_exit(self, monkeypatch, tmp_path):
+        """no-tmux ssh exit 255 still recorded (fix 8 interplay)."""
+        import subprocess as sp
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setattr(
+            sp, "run", lambda *a, **k: sp.CompletedProcess("ssh", 255))
+        putty.connect_to_session(
+            "s", {"HostName": "127.0.0.1", "PortNumber": "1"},
+            tmp_path / "r.reg", tmp_path / "rec", use_tmux=False,
+        )
+        entries = load_recent_entries(tmp_path / "rec")
+        assert entries["s"]["exit"] == 255

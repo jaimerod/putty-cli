@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils.display_util import generate_menu_items
 from utils.env_util import load_dotenv
@@ -86,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--logs-dir", metavar="DIR", default=None,
         help="log directory for --logs (default: $PUTTY_LOG_DIR resolution)",
     )
+    parser.add_argument(
+        "--no-tmux", action="store_true",
+        help="run ssh directly without tmux (no session logging); "
+             "also automatic when tmux is not installed",
+    )
     return parser
 
 
@@ -118,6 +123,26 @@ def usable_sessions(
     }
 
 
+def build_and_connect(
+    selected_name: str,
+    session: Dict[str, Any],
+    reg_path: Path,
+    use_tmux: Optional[bool] = None,
+) -> Tuple[Optional[List[str]], Optional[str], bool]:
+    """Resolve tmux availability and build the launch argv.
+
+    use_tmux: True/False forces the mode; None auto-detects (falls back
+    to bare ssh when the tmux binary is missing). Returns
+    (argv, temp_key, tmux_effectively_used)."""
+    if use_tmux is None:
+        use_tmux = shutil.which("tmux") is not None
+    return (
+        *build_ssh_command(selected_name, session,
+                           reg_path=reg_path, tmux=use_tmux),
+        use_tmux,
+    )
+
+
 def connect_to_session(
     selected_name: str,
     session: Dict[str, Any],
@@ -125,14 +150,15 @@ def connect_to_session(
     recent_file: Path,
     record: bool = True,
     dry_run: bool = False,
+    use_tmux: Optional[bool] = None,
 ) -> int:
     """Build and run (or just print) the ssh command for one session.
 
     Returns the process exit code (0 for dry-run)."""
     print(f"\nSelected: {unquote_display(selected_name)}")
 
-    cmd, temp_key = build_ssh_command(
-        unquote_display(selected_name), session, reg_path=reg_path
+    cmd, temp_key, tmux_used = build_and_connect(
+        selected_name, session, reg_path, use_tmux=use_tmux
     )
 
     if not cmd:
@@ -153,7 +179,10 @@ def connect_to_session(
         if exit_code == 0 and looks_like_tmux_argv(cmd):
             exit_code = attach_tmux_session(cmd)
     except FileNotFoundError:
-        print("Error: 'ssh' or 'tmux' not found. Please install openssh-client and tmux.", file=sys.stderr)
+        missing = "tmux" if tmux_used else "ssh"
+        print(f"Error: '{missing}' not found.", file=sys.stderr)
+        if tmux_used:
+            print("Tip: install tmux, or rerun with --no-tmux to skip it.", file=sys.stderr)
         exit_code = 1
     else:
         # Record the session on any normal exit, including ssh failures
@@ -347,6 +376,7 @@ def handle_action(
     recent_file: Path,
     record: bool = True,
     dry_run: bool = False,
+    use_tmux: Optional[bool] = None,
 ) -> int:
     """Dispatch a chosen action for a session; returns exit code."""
     if action == ACTION_COPY:
@@ -368,7 +398,7 @@ def handle_action(
         return ping_host(host, port)
     return connect_to_session(
         selected_name, session, reg_path, recent_file,
-        record=record, dry_run=dry_run,
+        record=record, dry_run=dry_run, use_tmux=use_tmux,
     )
 
 
@@ -415,6 +445,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return connect_to_session(
             args.connect, usable[args.connect], reg_path, recent_file,
             record=not args.no_record, dry_run=args.dry_run,
+            use_tmux=False if args.no_tmux else None,
         )
 
     # Interactive menu
@@ -453,6 +484,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return handle_action(
             action, selected_name, usable[selected_name], reg_path, recent_file,
             record=not args.no_record, dry_run=args.dry_run,
+            use_tmux=False if args.no_tmux else None,
         )
 
 
