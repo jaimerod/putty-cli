@@ -534,6 +534,56 @@ class TestSessionActions:
         assert argv[0] == "ssh"
         assert not any("tmux" in str(a) for a in argv)
         assert not (tmp_path / "logs").exists()  # no makedirs side effect
+
+
+# ── Tag grouping + archived toggle (item 2) ──────────────────────────────────
+
+class TestTagGrouping:
+    def test_session_tag_extraction(self):
+        from utils.display_util import session_tag
+        assert session_tag("prod:web-1") == "prod"
+        assert session_tag("Prod:DB") == "prod"
+        assert session_tag("no-tag-here") is None
+        assert session_tag(":empty-tag") is None
+        assert session_tag("Foo%20Bar:baz") == "foo bar"
+
+    def test_grouped_order_with_headers(self):
+        sessions = {
+            "prod:web-1": {"HostName": "a"},
+            "prod:web-2": {"HostName": "b"},
+            "staging:web": {"HostName": "c"},
+            "solo": {"HostName": "d"},
+        }
+        items = list(generate_menu_items(sessions, []))
+        names = [n for _, n in items if n is not None]
+        headers = [d for d, n in items if n is None]
+        assert headers == ["── PROD ──", "── STAGING ──", "── OTHER ──"]
+        assert names == ["prod:web-1", "prod:web-2", "staging:web", "solo"]
+
+    def test_flat_mode_no_tag_headers(self):
+        sessions = {
+            "prod:web-1": {"HostName": "a"},
+            "solo": {"HostName": "d"},
+        }
+        items = list(generate_menu_items(sessions, [], group_by_tag=False))
+        assert all(n is not None for _, n in items)  # no headers at all
+
+    def test_recents_not_grouped(self):
+        """Recent sessions stay under the recents header, ungrouped."""
+        sessions = {"prod:a": {"HostName": "a"}, "b": {"HostName": "b"}}
+        items = list(generate_menu_items(sessions, ["prod:a"]))
+        names = [n for _, n in items if n is not None]
+        assert names[0] == "prod:a"  # under RECENT, not under PROD header
+        headers = [d for d, _ in items if _ is None]
+        assert not any(d.startswith("── PROD") for d in headers)
+
+    def test_archived_toggle(self, capsys, monkeypatch):
+        import io
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = putty.main(["--list", "--archived"])
+        assert rc == 0
+        assert "xxx-archived" in buf.getvalue()
     def test_wrapper_script_is_executable_and_targets_repo(self):
         """bin/putty-cli: executable, resolves repo dir from its own path."""
         wrapper = Path(__file__).resolve().parent.parent / "bin" / "putty-cli"

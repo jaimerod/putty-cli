@@ -18,8 +18,20 @@ def make_display_pair(name: str, session: Dict[str, Any]) -> Tuple[str, str, str
     return (display.lower(), display, name)
 
 
+def session_tag(name: str) -> Optional[str]:
+    """Extract a group tag from a session name like 'prod:web-1' -> 'prod'.
+    None if the name has no 'tag:' prefix."""
+    unquoted = unquote_display(name)
+    if ":" in unquoted:
+        tag = unquoted.split(":", 1)[0].strip().lower()
+        if tag:
+            return tag
+    return None
+
+
 def generate_menu_items(
-    sessions: Dict[str, Dict[str, Any]], recent_names: list
+    sessions: Dict[str, Dict[str, Any]], recent_names: list,
+    group_by_tag: bool = True,
 ) -> Iterator[Tuple[str, Optional[str]]]:
     """
     Yields (display_text, session_name) tuples for the terminal menu.
@@ -27,6 +39,8 @@ def generate_menu_items(
     Args:
         sessions: A dictionary of all usable sessions.
         recent_names: A list of recently used session names.
+        group_by_tag: If True, sessions with 'tag:name' names are grouped
+            under 'TAG ─' headers; other sessions follow after.
 
     Yields:
         Tuples where the first element is the text for the menu and the second
@@ -43,10 +57,33 @@ def generate_menu_items(
         if len(sessions) > len(recent_names):
             yield "──────────────────────────────────────────────────────────────────────────────", None
 
-    # Sorted list of all other sessions
-    for name in sorted(
+    remaining = [n for n in sorted(
         sessions.keys(), key=lambda n: smart_title(unquote_display(n)).lower()
-    ):
-        if name not in recent_names:
+    ) if n not in recent_names]
+
+    if not group_by_tag:
+        for name in remaining:
             _, display, session_name = make_display_pair(name, sessions[name])
             yield display, session_name
+        return
+
+    # Sessions with a 'tag:' prefix, grouped under tag headers
+    grouped: Dict[str, list] = {}
+    ungrouped: list = []
+    for name in remaining:
+        tag = session_tag(name)
+        if tag:
+            grouped.setdefault(tag, []).append(name)
+        else:
+            ungrouped.append(name)
+
+    for tag in sorted(grouped):
+        yield f"── {tag.upper()} ──", None
+        for name in grouped[tag]:
+            _, display, session_name = make_display_pair(name, sessions[name])
+            yield display, session_name
+    if grouped and ungrouped:
+        yield "── OTHER ──", None
+    for name in ungrouped:
+        _, display, session_name = make_display_pair(name, sessions[name])
+        yield display, session_name

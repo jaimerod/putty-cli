@@ -63,6 +63,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-record", action="store_true",
         help="do not add the session to recent sessions",
     )
+    parser.add_argument(
+        "--archived", action="store_true",
+        help="also show archived sessions (names starting with 'xxx')",
+    )
+    parser.add_argument(
+        "--flat", action="store_true",
+        help="do not group 'tag:name' sessions under tag headers",
+    )
     return parser
 
 
@@ -82,13 +90,16 @@ def resolve_reg_path(cli_reg: Optional[str]) -> Path:
 # ───────────────────────────────────────────────────────────────────────────
 
 
-def usable_sessions(sessions: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Filter sessions to those with a HostName, hiding archived (xxx*) ones."""
+def usable_sessions(
+    sessions: Dict[str, Dict[str, Any]], include_archived: bool = False
+) -> Dict[str, Dict[str, Any]]:
+    """Filter sessions to those with a HostName; by default hides
+    archived sessions (name starts with 'xxx')."""
     return {
         k: v
         for k, v in sessions.items()
-        if "HostName" in v and v["HostName"].strip() and not k.lower().startswith("xxx")
-        # sessions named xxx* are treated as archived and hidden from the menu
+        if "HostName" in v and v["HostName"].strip()
+        and (include_archived or not k.lower().startswith("xxx"))
     }
 
 
@@ -147,12 +158,15 @@ def connect_to_session(
 
 
 def pick_session_interactive(
-    usable: Dict[str, Dict[str, Any]], recent_sessions: List[str]
+    usable: Dict[str, Dict[str, Any]], recent_sessions: List[str],
+    group_by_tag: bool = True,
 ) -> Optional[str]:
     """Show the menu; returns the selected session name or None on cancel."""
     menu_items: List[str] = []
     display_to_name: Dict[str, str] = {}
-    for display, name in generate_menu_items(usable, recent_sessions):
+    for display, name in generate_menu_items(
+        usable, recent_sessions, group_by_tag=group_by_tag
+    ):
         menu_items.append(display)
         if name:
             display_to_name[display] = name
@@ -291,7 +305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Error: cannot read .reg file {reg_path}: {e}", file=sys.stderr)
         return 1
 
-    usable = usable_sessions(sessions)
+    usable = usable_sessions(sessions, include_archived=args.archived)
 
     # Non-interactive modes
     if args.list:
@@ -322,7 +336,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Loop: session pick -> action -> maybe back to session pick
     while True:
-        selected_name = pick_session_interactive(usable, recent_sessions)
+        selected_name = pick_session_interactive(
+            usable, recent_sessions, group_by_tag=not args.flat
+        )
         if selected_name is None:
             print("\nSelection cancelled.")
             return 0
