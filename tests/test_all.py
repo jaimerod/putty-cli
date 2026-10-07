@@ -1,3 +1,5 @@
+import contextlib
+import io
 import shlex
 import shutil
 import sys
@@ -8,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
+import putty
 from utils.display_util import generate_menu_items, make_display_pair
 from utils.env_util import load_dotenv
 from utils.ppk_convert_util import convert_ppk_to_openssh
@@ -368,6 +371,103 @@ class TestDotenv:
 # ── Recents coverage gaps ────────────────────────────────────────────────────
 
 class TestRecentsEdgeCases:
+    def test_wrapper_script_is_executable_and_targets_repo(self):
+        """bin/putty-cli: executable, resolves repo dir from its own path."""
+        wrapper = Path(__file__).resolve().parent.parent / "bin" / "putty-cli"
+        import os
+        assert os.access(wrapper, os.X_OK)
+        content = wrapper.read_text()
+        assert "exec" in content
+        assert "venv" in content
+
+
+# ── CLI (item 23) ────────────────────────────────────────────────────────────
+
+class TestCli:
+    def _run(self, *args, env_reg="tests/data/sample.reg", expect_stdout=None, expect_stderr=None):
+        import io
+        import contextlib
+        import os
+        old = os.environ.get("PUTTY_REG_PATH")
+        if env_reg:
+            os.environ["PUTTY_REG_PATH"] = env_reg
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = putty.main(list(args))
+        if old is not None:
+            os.environ["PUTTY_REG_PATH"] = old
+        s_out, s_err = out.getvalue(), err.getvalue()
+        if expect_stdout:
+            assert expect_stdout in s_out, f"stdout missing {expect_stdout!r}: {s_out!r}"
+        if expect_stderr:
+            assert expect_stderr in s_err, f"stderr missing {expect_stderr!r}: {s_err!r}"
+        return rc
+
+    def test_list_prints_sorted_names(self):
+        rc = self._run("--list")
+        assert rc == 0
+
+    def test_list_excludes_archived(self, capsys):
+        import os
+        old = os.environ.get("PUTTY_REG_PATH")
+        os.environ["PUTTY_REG_PATH"] = "tests/data/sample.reg"
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            putty.main(["--list"])
+        if old is not None:
+            os.environ["PUTTY_REG_PATH"] = old
+        assert "xxx-archived" not in buf.getvalue()
+        assert "prod-web-1" in buf.getvalue()
+
+    def test_connect_dry_run(self):
+        rc = self._run(
+            "--connect", "prod-web-1", "--dry-run", "--no-record",
+            expect_stdout="prod-web-1",
+        )
+        assert rc == 0
+
+    def test_connect_unknown_session(self):
+        rc = self._run("--connect", "definitely-not-here", expect_stderr="no session named")
+        assert rc == 1
+
+    def test_connect_dry_run_does_not_record(self, tmp_path, monkeypatch):
+        import io
+        import contextlib
+        import os
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        recent = tmp_path / "recent.txt"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = putty.main(["--connect", "prod-db", "--dry-run"])
+        assert rc == 0
+        assert not recent.exists()
+
+    def test_no_reg_path_exits_cleanly(self, monkeypatch):
+        import io
+        import contextlib
+        monkeypatch.delenv("PUTTY_REG_PATH", raising=False)
+        monkeypatch.setattr("utils.env_util._find_env_file", lambda: None)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with pytest.raises(SystemExit) as exc:
+                putty.main(["--list"])
+        assert exc.value.code == 1
+        assert "PUTTY_REG_PATH" in err.getvalue()
+
+    def test_parser_help_lists_modes(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            putty.build_parser().parse_args(["--help"])
+        assert exc.value.code == 0
+        assert "--connect" in capsys.readouterr().out
+
+    def test_archived_sessions_hidden_from_menu(self, capsys):
+        import os
+        old = os.environ.get("PUTTY_REG_PATH")
+        os.environ["PUTTY_REG_PATH"] = "tests/data/sample.reg"
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            putty.main(["--list"])
+        if old is not None:
+            os.environ["PUTTY_REG_PATH"] = old
+        assert "xxx-archived" not in buf.getvalue()
     def test_wrapper_script_is_executable_and_targets_repo(self):
         """bin/putty-cli: executable, resolves repo dir from its own path."""
         wrapper = Path(__file__).resolve().parent.parent / "bin" / "putty-cli"
