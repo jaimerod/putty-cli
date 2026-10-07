@@ -1,4 +1,5 @@
 from typing import Any, Dict, Iterator, Optional, Tuple
+from .recent_sessions_util import format_relative_time
 from .titlecase_util import smart_title, unquote_display
 
 
@@ -32,6 +33,7 @@ def session_tag(name: str) -> Optional[str]:
 def generate_menu_items(
     sessions: Dict[str, Dict[str, Any]], recent_names: list,
     group_by_tag: bool = True,
+    recent_entries: Optional[Dict[str, Dict[str, object]]] = None,
 ) -> Iterator[Tuple[str, Optional[str]]]:
     """
     Yields (display_text, session_name) tuples for the terminal menu.
@@ -41,6 +43,8 @@ def generate_menu_items(
         recent_names: A list of recently used session names.
         group_by_tag: If True, sessions with 'tag:name' names are grouped
             under 'TAG ─' headers; other sessions follow after.
+        recent_entries: Optional {'name': {'ts': epoch, 'exit': code}}
+            metadata for recents; adds an '(2h ago ✗)' info suffix.
 
     Yields:
         Tuples where the first element is the text for the menu and the second
@@ -52,6 +56,13 @@ def generate_menu_items(
         for name in recent_names:
             if name in sessions:
                 _, display, session_name = make_display_pair(name, sessions[name])
+                if recent_entries and name in recent_entries:
+                    entry = recent_entries[name]
+                    info = format_relative_time(entry.get("ts"))
+                    if int(entry.get("exit") or 0) not in (0, None):
+                        info += (" " if info else "") + "✗"
+                    if info:
+                        display = f"{display}  ({info})"
                 yield display, session_name
         # Separator if there are other sessions to show
         if len(sessions) > len(recent_names):

@@ -15,7 +15,9 @@ from utils.display_util import generate_menu_items, make_display_pair
 from utils.env_util import load_dotenv
 from utils.ppk_convert_util import convert_ppk_to_openssh
 from utils.putty_parse_util import parse_putty_reg
-from utils.recent_sessions_util import load_recent_sessions, update_recent_sessions
+from utils.recent_sessions_util import (load_recent_entries,
+                                        load_recent_sessions,
+                                        update_recent_sessions)
 from utils.ssh_command_util import build_ssh_command, safe_name
 from utils.titlecase_util import smart_title, unquote_display
 
@@ -238,24 +240,38 @@ class TestRecents:
         f = tmp_path / "recent.txt"
         f.write_text("\n".join(f"s{i}" for i in range(25)), encoding="utf-8")
         update_recent_sessions(f, "new")
-        lines = f.read_text(encoding="utf-8").splitlines()
-        assert lines[0] == "new"
-        assert len(lines) == 20
-        assert "s25" not in lines
+        entries = load_recent_entries(f)
+        assert list(entries)[0] == "new"
+        assert len(entries) == 20
+        assert "s25" not in entries
 
     def test_update_dedupes_selected(self, tmp_path):
         f = tmp_path / "recent.txt"
         f.write_text("a\nb\nc\n", encoding="utf-8")
         update_recent_sessions(f, "b")
-        lines = f.read_text(encoding="utf-8").splitlines()
-        assert lines == ["b", "a", "c"]
+        entries = load_recent_entries(f)
+        assert list(entries) == ["b", "a", "c"]
+        assert entries["b"]["ts"] is not None
+
+    def test_legacy_plain_format_still_loads(self, tmp_path):
+        f = tmp_path / "recent.txt"
+        f.write_text("a\nb\n", encoding="utf-8")
+        assert load_recent_sessions(f, {"a": {}, "b": {}}) == ["a", "b"]
+
+    def test_record_with_exit_code(self, tmp_path):
+        f = tmp_path / "recent.txt"
+        update_recent_sessions(f, "hA", exit_code=255)
+        entries = load_recent_entries(f)
+        assert entries["hA"]["exit"] == 255
+        assert entries["hA"]["ts"] is not None
 
     def test_record_on_failed_ssh_exit(self, monkeypatch, tmp_path):
         """Fix 8: ssh exit 255 (conn refused) must still record the session."""
         f = tmp_path / "recent.txt"
         monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeResult(255))
-        update_recent_sessions(f, "hostA")
-        assert f.read_text().splitlines() == ["hostA"]
+        update_recent_sessions(f, "hostA", exit_code=255)
+        entries = load_recent_entries(f)
+        assert entries["hostA"]["exit"] == 255
 
     def test_no_record_on_launch_failure(self, monkeypatch, tmp_path, capsys):
         """tmux missing -> FileNotFoundError -> no recent entry."""
@@ -1177,3 +1193,53 @@ class TestPpkPathResolution:
         monkeypatch.delenv("PUTTY_LOG_DIR", raising=False)
         argv, _ = build_ssh_command("s", {"HostName": "h"}, reg_path=None)
         assert str(Path.home() / ".putty-cli" / "logs") in " ".join(argv)
+
+
+# ── Recents metadata + display suffixes (items 8+9) ──────────────────────────
+
+class TestRecentsMetadata:
+    def test_format_relative_time(self, monkeypatch):
+        from utils.recent_sessions_util import format_relative_time
+        import time as t
+        now = int(t.time())
+        monkeypatch.setattr(t, "time", lambda: now)
+        assert format_relative_time(None) == ""
+        assert format_relative_time(now - 5) == "5s ago" or \
+            format_relative_time(now) == "just now"
+        assert format_relative_time(now - 120) == "2m ago"
+        assert format_relative_time(now - 7200) == "2h ago"
+        assert format_relative_time(now - 90000) == "1d ago"
+        assert format_relative_time(now + 999) == "just now"  # future clamp
+
+    def test_menu_shows_ago_and_failure_marker(self):
+        import time as t
+        sessions = {"a": {"HostName": "a"}}
+        entries = {"a": {"ts": int(t.time()) - 7200, "exit": 255}}
+        items = list(generate_menu_items(sessions, ["a"], recent_entries=entries))
+        display = next(d for d, n in items if n == "a")
+        assert "(2h ago ✗)" in display
+
+    def test_menu_healthy_recent_shows_ago_only(self):
+        import time as t
+        sessions = {"a": {"HostName": "a"}}
+        entries = {"a": {"ts": int(t.time()) - 300, "exit": 0}}
+        items = list(generate_menu_items(sessions, ["a"], recent_entries=entries))
+        display = next(d for d, n in items if n == "a")
+        assert "5m ago" in display and "✗" not in display
+
+    def test_nonrecent_no_metadata_suffix(self):
+        sessions = {"a": {"HostName": "a"}, "b": {"HostName": "b"}}
+        entries = {"a": {"ts": 123, "exit": 0}}
+        items = list(generate_menu_items(sessions, ["a"], recent_entries=entries))
+        b_display = next(d for d, n in items if n == "b")
+        assert "ago" not in b_display
+
+    def test_atomic_write_replaces_file(self, tmp_path):
+        """Item 25: update writes via os.replace - target always complete."""
+        f = tmp_path / "recent.txt"
+        f.write_text("seed\n", encoding="utf-8")
+        inode_before = f.stat().st_ino
+        update_recent_sessions(f, "x", exit_code=0)
+        inode_after = f.stat().st_ino
+        assert inode_before != inode_after  # os.replace created a new file
+        assert load_recent_sessions(f, {"x": {}, "seed": {}})[0] == "x"

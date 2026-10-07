@@ -17,7 +17,8 @@ from typing import Any, Dict, List, Optional
 from utils.display_util import generate_menu_items
 from utils.env_util import load_dotenv
 from utils.putty_parse_util import parse_putty_reg
-from utils.recent_sessions_util import (load_recent_sessions,
+from utils.recent_sessions_util import (load_recent_entries,
+                                        load_recent_sessions,
                                         update_recent_sessions)
 from utils.ssh_command_util import build_ssh_command
 from utils.titlecase_util import unquote_display
@@ -149,10 +150,13 @@ def connect_to_session(
     else:
         # Record the session on any normal exit, including ssh failures
         # (255 = connection refused/timeout) so failed hosts stay handy
-        # for a quick retry. tmux launch failure (see FileNotFoundError
-        # above) is NOT recorded - the session never actually opened.
+        # for a quick retry with the failure visible in the menu. tmux
+        # launch failure (see FileNotFoundError above) is NOT recorded -
+        # the session never actually opened.
         if record:
-            update_recent_sessions(recent_file, selected_name)
+            update_recent_sessions(
+                recent_file, selected_name, exit_code=exit_code
+            )
     finally:
         # Cached keys live in the ppk cache dir and must survive; only
         # delete keys created outside it (cache-miss fallback temp files).
@@ -199,12 +203,14 @@ def pick_session_fzf(
 def pick_session_interactive(
     usable: Dict[str, Dict[str, Any]], recent_sessions: List[str],
     group_by_tag: bool = True,
+    recent_entries: Optional[Dict[str, Dict[str, object]]] = None,
 ) -> Optional[str]:
     """Show the menu; returns the selected session name or None on cancel."""
     menu_items: List[str] = []
     display_to_name: Dict[str, str] = {}
     for display, name in generate_menu_items(
-        usable, recent_sessions, group_by_tag=group_by_tag
+        usable, recent_sessions, group_by_tag=group_by_tag,
+        recent_entries=recent_entries,
     ):
         menu_items.append(display)
         if name:
@@ -405,6 +411,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     recent_sessions: List[str] = load_recent_sessions(recent_file, usable)
+    recent_entries = load_recent_entries(recent_file)
 
     # Loop: session pick -> action -> maybe back to session pick
     while True:
@@ -413,11 +420,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             selected_name = picker(usable, reg_path)
             if selected_name is None and shutil.which("fzf") is None:
                 selected_name = pick_session_interactive(
-                    usable, recent_sessions, group_by_tag=not args.flat
+                    usable, recent_sessions, group_by_tag=not args.flat,
+                    recent_entries=recent_entries,
                 )
         else:
             selected_name = pick_session_interactive(
-                usable, recent_sessions, group_by_tag=not args.flat
+                usable, recent_sessions, group_by_tag=not args.flat,
+                recent_entries=recent_entries,
             )
         if selected_name is None:
             print("\nSelection cancelled.")
