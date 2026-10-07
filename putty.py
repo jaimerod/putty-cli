@@ -8,6 +8,7 @@ Handles .ppk keys via puttygen (Linux version)
 import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -70,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--flat", action="store_true",
         help="do not group 'tag:name' sessions under tag headers",
+    )
+    parser.add_argument(
+        "--fzf", action="store_true",
+        help="use fzf for session picking (if installed) instead of "
+             "the built-in menu; falls back to the menu when absent",
     )
     return parser
 
@@ -155,6 +161,34 @@ def connect_to_session(
                 except OSError as e:
                     print(f"Warning: Could not remove temp key: {e}", file=sys.stderr)
     return exit_code
+
+
+def pick_session_fzf(
+    usable: Dict[str, Dict[str, Any]], reg_path: Path
+) -> Optional[str]:
+    """Pick a session via fzf with a live preview of the ssh command.
+    Returns None if fzf is missing or the user cancelled."""
+    if shutil.which("fzf") is None:
+        print("Note: fzf not found; using built-in menu.", file=sys.stderr)
+        return None
+
+    names = sorted(usable)
+    preview_cmd = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} "
+        f"--connect {{}} --dry-run 2>/dev/null | head -40"
+    )
+    try:
+        result = subprocess.run(
+            ["fzf", "--height=40%", "--reverse",
+             "--preview", preview_cmd, "--preview-window", "right:60%:wrap"],
+            input="\n".join(names), text=True, capture_output=True,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None  # user pressed Esc
+    selected = result.stdout.strip()
+    return selected if selected in usable else None
 
 
 def pick_session_interactive(
@@ -336,9 +370,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Loop: session pick -> action -> maybe back to session pick
     while True:
-        selected_name = pick_session_interactive(
-            usable, recent_sessions, group_by_tag=not args.flat
-        )
+        picker = pick_session_fzf if args.fzf else None
+        if picker is not None:
+            selected_name = picker(usable, reg_path)
+            if selected_name is None and shutil.which("fzf") is None:
+                selected_name = pick_session_interactive(
+                    usable, recent_sessions, group_by_tag=not args.flat
+                )
+        else:
+            selected_name = pick_session_interactive(
+                usable, recent_sessions, group_by_tag=not args.flat
+            )
         if selected_name is None:
             print("\nSelection cancelled.")
             return 0

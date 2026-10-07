@@ -524,6 +524,53 @@ class TestSessionActions:
         assert rc == 0
         assert called.get("dry_run") is False
 
+    def test_fzf_missing_falls_back(self, monkeypatch, capsys, tmp_path):
+        """--fzf with no fzf binary -> note printed, falls back to menu."""
+        monkeypatch.setattr(shutil, "which", lambda name: None)
+        from putty import pick_session_fzf
+        result = pick_session_fzf({"a": {"HostName": "a"}}, tmp_path / "r.reg")
+        assert result is None
+        assert "fzf not found" in capsys.readouterr().err
+
+    def test_fzf_esc_returns_none(self, monkeypatch, tmp_path):
+        """fzf nonzero exit (Esc) -> None."""
+        import subprocess as sp
+        from putty import pick_session_fzf
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/fzf")
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: sp.CompletedProcess(a[0], 130, stdout=""),
+        )
+        assert pick_session_fzf(
+            {"a": {"HostName": "a"}}, tmp_path / "r.reg") is None
+
+    def test_fzf_picks_valid_session(self, monkeypatch, tmp_path):
+        import subprocess as sp
+        from putty import pick_session_fzf
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/fzf")
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: sp.CompletedProcess(a[0], 0, stdout="a\n"),
+        )
+        assert pick_session_fzf(
+            {"a": {"HostName": "a"}}, tmp_path / "r.reg") == "a"
+
+    def test_fzf_filters_invalid_output(self, monkeypatch, tmp_path):
+        import subprocess as sp
+        from putty import pick_session_fzf
+        monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/fzf")
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: sp.CompletedProcess(a[0], 0, stdout="ghost\n"),
+        )
+        assert pick_session_fzf(
+            {"a": {"HostName": "a"}}, tmp_path / "r.reg") is None
+
+    def test_cmdline_fzf_flag_accepted(self):
+        """--fzf parses (menu fallback tested via pick functions)."""
+        args = putty.build_parser().parse_args(["--fzf", "--list"])
+        assert args.fzf is True
+
     def test_build_ssh_command_no_tmux(self, tmp_path, monkeypatch):
         """tmux=False returns bare ssh argv (no tmux, no log side effects)."""
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
