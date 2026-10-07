@@ -289,6 +289,16 @@ class TestBuildSshCommand:
         tokens = ssh_tokens(argv)
         assert tokens[tokens.index("-J") + 1] == "ju@jump.example.com:2222"
 
+    def test_socks_proxy_warns_and_is_ignored(self, capsys):
+        argv, _ = build_ssh_command("s", {
+            "HostName": "via-socks.internal", "ProxyMethod": "3",
+            "ProxyHost": "socks.example.com",
+        })
+        tokens = ssh_tokens(argv)
+        assert "-J" not in tokens
+        err = capsys.readouterr().err
+        assert "Warning" in err and "socks.example.com" in err
+
     def test_remote_command_argv(self):
         argv, _ = build_ssh_command("s", {
             "HostName": "c.example.com", "RemoteCommand": "htop",

@@ -34,6 +34,11 @@ def build_ssh_command(
     if port != "22":
         parts.extend(["-p", port])
 
+    # ProxyMethod 6 is PuTTY's "local" proxy command type. This tool maps it
+    # to ssh's ProxyJump (-J): in practice PuTTY setups exported here use
+    # ProxyHost/ProxyPort/ProxyUsername of a jump host, which is exactly
+    # what -J models. Methods 1-3 (SOCKS4/5, HTTP CONNECT) are not supported
+    # and produce a warning below.
     proxy_method = session.get("ProxyMethod", "0").strip()
     proxy_host = session.get("ProxyHost", "").strip()
     if proxy_method == "6" and proxy_host:
@@ -43,6 +48,13 @@ def build_ssh_command(
         if proxy_port and proxy_port != "22":
             jump = f"{jump}:{proxy_port}"
         parts.extend(["-J", jump])
+    elif proxy_method in {"1", "2", "3"} and proxy_host:
+        print(
+            f"  → Warning: proxy type {proxy_method} (SOCKS/HTTP) has no direct "
+            f"ssh equivalent; ignoring proxy for {proxy_host}. "
+            "Consider ProxyMethod 6 (jump host) in PuTTY instead.",
+            file=sys.stderr,
+        )
 
     user = session.get("UserName", "").strip()
     host = session["HostName"].strip()
