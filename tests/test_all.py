@@ -468,6 +468,72 @@ class TestCli:
         if old is not None:
             os.environ["PUTTY_REG_PATH"] = old
         assert "xxx-archived" not in buf.getvalue()
+
+
+# ── Session actions (item 1) ─────────────────────────────────────────────────
+
+class TestSessionActions:
+    def test_ping_reachable(self, monkeypatch):
+        # localhost has no ssh, but a bound port answers TCP
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        rc = putty.ping_host("127.0.0.1", str(port))
+        srv.close()
+        assert rc == 0
+
+    def test_ping_unreachable(self, capsys):
+        # RFC 5737 test addr, short timeout
+        rc = putty.ping_host("192.0.2.1", "1")
+        assert rc == 1
+        assert "unreachable" in capsys.readouterr().err
+
+    def test_copy_to_clipboard_osc52(self, capsys):
+        assert putty.copy_to_clipboard("ssh foo") is True
+        out = capsys.readouterr().out
+        assert "\033]52;c;" in out  # OSC52 escape sequence
+
+    def test_handle_action_copy(self, capsys, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        rc = putty.handle_action(
+            putty.ACTION_COPY, "s", {"HostName": "h.example.com"},
+            reg_path=tmp_path / "putty.reg", recent_file=tmp_path / "rec",
+        )
+        assert rc == 0
+        assert "Copied" in capsys.readouterr().out
+
+    def test_handle_action_ping(self, tmp_path):
+        rc = putty.handle_action(
+            putty.ACTION_PING, "s", {"HostName": "127.0.0.1", "PortNumber": "1"},
+            reg_path=tmp_path / "putty.reg", recent_file=tmp_path / "rec",
+        )
+        assert rc == 1
+
+    def test_handle_action_connect_invokes_connect(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        called = {}
+        monkeypatch.setattr(putty, "connect_to_session",
+                            lambda *a, **k: called.update(k) or 0)
+        rc = putty.handle_action(
+            putty.ACTION_CONNECT, "s", {"HostName": "h"},
+            reg_path=tmp_path / "putty.reg", recent_file=tmp_path / "rec",
+            dry_run=False,
+        )
+        assert rc == 0
+        assert called.get("dry_run") is False
+
+    def test_build_ssh_command_no_tmux(self, tmp_path, monkeypatch):
+        """tmux=False returns bare ssh argv (no tmux, no log side effects)."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, _ = build_ssh_command(
+            "s", {"HostName": "h", "UserName": "u", "PortNumber": "2222"},
+            reg_path=tmp_path / "putty.reg", tmux=False,
+        )
+        assert argv[0] == "ssh"
+        assert not any("tmux" in str(a) for a in argv)
+        assert not (tmp_path / "logs").exists()  # no makedirs side effect
     def test_wrapper_script_is_executable_and_targets_repo(self):
         """bin/putty-cli: executable, resolves repo dir from its own path."""
         wrapper = Path(__file__).resolve().parent.parent / "bin" / "putty-cli"

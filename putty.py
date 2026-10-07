@@ -191,6 +191,87 @@ def pick_session_interactive(
     return display_to_name[selected_display]
 
 
+ACTION_CONNECT = "Connect"
+ACTION_COPY = "Copy ssh command to clipboard"
+ACTION_PING = "Ping host (check reachability)"
+ACTION_BACK = "Back to session list"
+
+
+def pick_action(session_name: str) -> Optional[str]:
+    """Show the per-session action menu. None = back to session list."""
+    actions = [ACTION_CONNECT, ACTION_COPY, ACTION_PING, ACTION_BACK]
+    action_menu = TerminalMenu(
+        actions,
+        title=f"\n Session: {unquote_display(session_name)}\n",
+        menu_cursor="➜ ",
+        menu_cursor_style=("fg_cyan", "bold"),
+        menu_highlight_style=("standout",),
+        clear_screen=False,
+    )
+    idx = action_menu.show()
+    if idx is None:
+        return None
+    return actions[idx]
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text via OSC52 (any terminal) or xclip/wl-copy fallback."""
+    import base64
+    encoded = base64.b64encode(text.encode()).decode()
+    try:
+        sys.stdout.write(f"\033]52;c;{encoded}\007")
+        sys.stdout.flush()
+        return True
+    except OSError:
+        return False
+
+
+def ping_host(host: str, port: str = "22") -> int:
+    """TCP-level reachability probe (works where ICMP ping is blocked)."""
+    import socket
+    host = host.split("@")[-1]
+    try:
+        with socket.create_connection((host, int(port)), timeout=3):
+            print(f"  ✓ {host}:{port} reachable")
+            return 0
+    except OSError as e:
+        print(f"  ✗ {host}:{port} unreachable ({e})", file=sys.stderr)
+        return 1
+
+
+def handle_action(
+    action: str,
+    selected_name: str,
+    session: Dict[str, Any],
+    reg_path: Path,
+    recent_file: Path,
+    record: bool = True,
+    dry_run: bool = False,
+) -> int:
+    """Dispatch a chosen action for a session; returns exit code."""
+    if action == ACTION_COPY:
+        cmd, _temp_key = build_ssh_command(
+            unquote_display(selected_name), session, reg_path=reg_path,
+            tmux=False,
+        )
+        if cmd and copy_to_clipboard(shlex.join(cmd)):
+            print("Copied to clipboard (OSC52).")
+            return 0
+        print("Could not copy to clipboard.", file=sys.stderr)
+        return 1
+    if action == ACTION_PING:
+        host = session.get("HostName", "").strip()
+        port = session.get("PortNumber", "22")
+        if not host:
+            print("No hostname to ping.", file=sys.stderr)
+            return 1
+        return ping_host(host, port)
+    return connect_to_session(
+        selected_name, session, reg_path, recent_file,
+        record=record, dry_run=dry_run,
+    )
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Main entry: parse args, load sessions, connect or show menu."""
     args = build_parser().parse_args(argv)
@@ -239,15 +320,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     recent_sessions: List[str] = load_recent_sessions(recent_file, usable)
 
-    selected_name = pick_session_interactive(usable, recent_sessions)
-    if selected_name is None:
-        print("\nSelection cancelled.")
-        return 0
+    # Loop: session pick -> action -> maybe back to session pick
+    while True:
+        selected_name = pick_session_interactive(usable, recent_sessions)
+        if selected_name is None:
+            print("\nSelection cancelled.")
+            return 0
 
-    return connect_to_session(
-        selected_name, usable[selected_name], reg_path, recent_file,
-        record=not args.no_record, dry_run=args.dry_run,
-    )
+        action = pick_action(selected_name)
+        if action is None or action == ACTION_BACK:
+            continue  # back to the session list
+        return handle_action(
+            action, selected_name, usable[selected_name], reg_path, recent_file,
+            record=not args.no_record, dry_run=args.dry_run,
+        )
 
 
 if __name__ == "__main__":

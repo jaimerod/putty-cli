@@ -22,12 +22,14 @@ def build_ssh_command(
     session_name: str,
     session: Dict[str, str],
     reg_path: Optional[Path] = None,
+    tmux: bool = True,
 ) -> Tuple[Optional[List[str]], Optional[str]]:
     """Build the tmux command that opens an ssh session.
 
     Returns (argv, temp_key_path) where argv is a list safe to pass to
-    subprocess.run(shell=False). Returns (None, None) if the session has
-    no usable HostName.
+    subprocess.run(shell=False). With tmux=False, argv is the bare ssh
+    command (used for clipboard copy / dry-run display / no-tmux mode).
+    Returns (None, None) if the session has no usable HostName.
     """
     if "HostName" not in session or not session["HostName"].strip():
         return None, None
@@ -110,6 +112,11 @@ def build_ssh_command(
     if remote_cmd:
         parts.insert(1, "-t")
         parts.append(remote_cmd)
+
+    if not tmux:
+        # Bare ssh argv (clipboard copy, dry-run display, no-tmux mode).
+        # log dir is not needed; skip makedirs side effect.
+        return parts, temp_key
 
     # Log dir: PUTTY_LOG_DIR overrides; default to the directory holding the
     # .reg file (so it follows whatever file the user configured).
