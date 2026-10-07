@@ -143,11 +143,17 @@ def main() -> None:
     except FileNotFoundError:
         print("Error: 'ssh' or 'tmux' not found. Please install openssh-client and tmux.", file=sys.stderr)
     finally:
+        # Cached keys live in the ppk cache dir and must survive; only
+        # delete keys created outside it (cache-miss fallback temp files).
         if temp_key and os.path.exists(temp_key):
-            try:
-                os.unlink(temp_key)
-            except OSError as e:
-                print(f"Warning: Could not remove temp key: {e}", file=sys.stderr)
+            cache_root = os.environ.get("PUTTY_PPK_CACHE_DIR") or str(
+                Path.home() / ".cache" / "putty-cli" / "keys"
+            )
+            if not os.path.abspath(temp_key).startswith(os.path.abspath(cache_root)):
+                try:
+                    os.unlink(temp_key)
+                except OSError as e:
+                    print(f"Warning: Could not remove temp key: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

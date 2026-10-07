@@ -1,6 +1,7 @@
 import shlex
 import shutil
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -8,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 from utils.display_util import generate_menu_items, make_display_pair
+from utils.env_util import load_dotenv
+from utils.ppk_convert_util import convert_ppk_to_openssh
 from utils.putty_parse_util import parse_putty_reg
 from utils.recent_sessions_util import load_recent_sessions, update_recent_sessions
 from utils.ssh_command_util import build_ssh_command, safe_name
@@ -399,3 +402,79 @@ class TestBuildSshCommand:
         assert safe_name("a/b\\c:d*e?f") == "a_b_c_d_e_f"
         assert safe_name("") == "session"
         assert safe_name("normal-session_1.0") == "normal-session_1.0"
+
+
+# ── PPK conversion + cache ───────────────────────────────────────────────────
+
+class TestPpkConvert:
+    def _scratch_cache(self, monkeypatch, tmp_path):
+        cache = tmp_path / "ppkcache"
+        monkeypatch.setenv("PUTTY_PPK_CACHE_DIR", str(cache))
+        return cache
+
+    def test_conversion_produces_openssh_key(self, monkeypatch, tmp_path):
+        self._scratch_cache(monkeypatch, tmp_path)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
+            f.write(Path(PPK_FIXTURE).read_bytes())
+            ppk = f.name
+        key = convert_ppk_to_openssh(ppk)
+        assert key is not None
+        content = Path(key).read_text()
+        assert content.startswith("-----BEGIN")
+        Path(key).unlink()
+
+    def test_cache_hit_second_time(self, monkeypatch, tmp_path):
+        cache = self._scratch_cache(monkeypatch, tmp_path)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
+            f.write(Path(PPK_FIXTURE).read_bytes())
+            ppk = f.name
+
+        first = convert_ppk_to_openssh(ppk)
+        assert first is not None
+        assert str(cache) in first  # installed into cache
+        mtime = Path(first).stat().st_mtime_ns
+
+        second = convert_ppk_to_openssh(ppk)
+        assert second == str(Path(first).resolve()) or str(cache) in str(second)
+        assert Path(first).stat().st_mtime_ns == mtime  # not rewritten
+
+    def test_cache_invalidated_on_mtime_change(self, monkeypatch, tmp_path):
+        cache = self._scratch_cache(monkeypatch, tmp_path)
+        import os
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
+            f.write(Path(PPK_FIXTURE).read_bytes())
+            ppk = f.name
+
+        first = convert_ppk_to_openssh(ppk)
+        assert first is not None
+
+        # Touch the source .ppk with a much newer mtime
+        far_future = time.time() + 100000
+        os.utime(ppk, (far_future, far_future))
+
+        second = convert_ppk_to_openssh(ppk)
+        assert second is not None
+        assert second != first
+
+    def test_missing_key_file(self, monkeypatch, tmp_path):
+        self._scratch_cache(monkeypatch, tmp_path)
+        assert convert_ppk_to_openssh(str(tmp_path / "nope.ppk")) is None
+
+    def test_garbage_key_fails_gracefully(self, monkeypatch, tmp_path):
+        self._scratch_cache(monkeypatch, tmp_path)
+        bad = tmp_path / "bad.ppk"
+        bad.write_text("this is not a ppk\n")
+        assert convert_ppk_to_openssh(str(bad)) is None
+
+    def test_key_permissions_0600(self, monkeypatch, tmp_path):
+        cache = self._scratch_cache(monkeypatch, tmp_path)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
+            f.write(Path(PPK_FIXTURE).read_bytes())
+            ppk = f.name
+        key = convert_ppk_to_openssh(ppk)
+        assert key is not None
+        assert (Path(key).stat().st_mode & 0o777) == 0o600
