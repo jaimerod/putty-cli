@@ -1,7 +1,12 @@
-def unquote_display(s: str) -> str:
-    """Clean up %20 etc. for nicer display"""
-    return s.replace("%20", " ").replace("%2F", "/").replace("%5C", "\\").replace("%3A", ":")
 import re
+from urllib.parse import unquote
+
+
+def unquote_display(s: str) -> str:
+    """Decode percent-escapes for nicer display of PuTTY session names
+    (PuTTY encodes ' ' as %20, '/' as %2F, etc.)."""
+    return unquote(s)
+
 
 def smart_title(s: str) -> str:
     """Title case after space, hyphen, underscore, or period (no space after period)."""

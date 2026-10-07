@@ -1,7 +1,8 @@
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 from .titlecase_util import smart_title, unquote_display
 
-def make_display_pair(name: str, session: Dict[str, str]) -> tuple[str, str, str]:
+
+def make_display_pair(name: str, session: Dict[str, Any]) -> Tuple[str, str, str]:
     host = unquote_display(session.get("HostName", "???"))
     user = unquote_display(session.get("UserName", ""))
     port = session.get("PortNumber", "22")
@@ -18,7 +19,7 @@ def make_display_pair(name: str, session: Dict[str, str]) -> tuple[str, str, str
 
 
 def generate_menu_items(
-    sessions: Dict[str, Dict[str, Any]], recent_names: List[str]
+    sessions: Dict[str, Dict[str, Any]], recent_names: list
 ) -> Iterator[Tuple[str, Optional[str]]]:
     """
     Yields (display_text, session_name) tuples for the terminal menu.

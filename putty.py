@@ -25,9 +25,9 @@ try:
 except ImportError:
     print("Error: simple-term-menu not installed.", file=sys.stderr)
     print("Please use a venv and install dependencies:", file=sys.stderr)
-    print("  python3 -m venv venv", file=sys.stderr)
-    print("  source venv/bin/activate", file=sys.stderr)
-    print("  pip install -r recommendations.txt", file=sys.stderr)
+    print("  python3 -m venv .venv", file=sys.stderr)
+    print("  source .venv/bin/activate", file=sys.stderr)
+    print("  pip install -r requirements.txt", file=sys.stderr)
     sys.exit(1)
 
 # ─── Config ────────────────────────────────────────────────────────────────
@@ -72,6 +72,7 @@ def main() -> None:
         k: v
         for k, v in sessions.items()
         if "HostName" in v and v["HostName"].strip() and not k.lower().startswith("xxx")
+        # sessions named xxx* are treated as archived and hidden from the menu
     }
 
     if not usable_sessions:
