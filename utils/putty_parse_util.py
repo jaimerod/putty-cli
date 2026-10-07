@@ -15,7 +15,7 @@ def _read_reg_text(file_path: Path) -> str:
     data = file_path.read_bytes()
     if data.startswith(b"\xff\xfe"):
         return data.decode("utf-16", errors="replace")
-    if data.startswith(b"\xfe\xff"):
+    if data[:2] == b"\x00[" or data.startswith(b"\xfe\xff"):
         return data.decode("utf-16-be", errors="replace")
     if b"\x00" in data[:256]:
         return data.decode("utf-16-le", errors="replace")
