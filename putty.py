@@ -107,6 +107,15 @@ def resolve_reg_path(cli_reg: Optional[str]) -> Path:
         )
         sys.exit(1)
     return Path(value).expanduser().resolve()
+
+
+def file_stamp(path: Path) -> Optional[tuple]:
+    """(size, mtime_ns) of a file, or None if unreadable."""
+    try:
+        st = path.stat()
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
 # ───────────────────────────────────────────────────────────────────────────
 
 
@@ -458,9 +467,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     recent_sessions: List[str] = load_recent_sessions(recent_file, usable)
     recent_entries = load_recent_entries(recent_file)
+    reg_stamp = file_stamp(reg_path)
 
     # Loop: session pick -> action -> maybe back to session pick
     while True:
+        # Item 26: a long-lived menu can outlive an edit to the .reg file
+        # (user re-exports on the Windows side). Re-stat before each pick
+        # and reload when changed so new/renamed sessions appear.
+        current_stamp = file_stamp(reg_path)
+        if reg_stamp is not None and current_stamp != reg_stamp:
+            try:
+                reloaded = parse_putty_reg(reg_path)
+                usable = usable_sessions(reloaded, include_archived=args.archived)
+                recent_sessions = load_recent_sessions(recent_file, usable)
+                recent_entries = load_recent_entries(recent_file)
+                reg_stamp = current_stamp
+                print("↻ .reg file changed - session list reloaded.", file=sys.stderr)
+            except (OSError, Exception):
+                pass  # keep showing the last good snapshot
         picker = pick_session_fzf if args.fzf else None
         if picker is not None:
             selected_name = picker(usable, reg_path)

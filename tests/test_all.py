@@ -1434,3 +1434,59 @@ class TestNoTmuxFallback:
         )
         entries = load_recent_entries(tmp_path / "rec")
         assert entries["s"]["exit"] == 255
+
+
+# ── Reg file reload on change (item 26) ──────────────────────────────────────
+
+class TestRegReload:
+    def test_file_stamp_changes_on_write(self, tmp_path):
+        f = tmp_path / "x.reg"
+        f.write_text("a", encoding="utf-8")
+        s1 = putty.file_stamp(f)
+        import os
+        os.utime(f, ns=(s1[1] + 10**6, s1[1] + 10**6))
+        s2 = putty.file_stamp(f)
+        assert s1 != s2
+
+    def test_file_stamp_missing_file(self, tmp_path):
+        assert putty.file_stamp(tmp_path / "nope") is None
+
+    def test_main_reloads_when_reg_changes(self, monkeypatch, tmp_path, capsys):
+        """Simulate: menu opens, reg file gains a session mid-loop, and the
+        next pick call must receive the reloaded session dict."""
+        reg = tmp_path / "live.reg"
+        reg.write_text(
+            '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\first]\n'
+            '"HostName"="a.example.com"\n', encoding="utf-8")
+        monkeypatch.setenv("PUTTY_REG_PATH", str(reg))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        seen_usable = []
+
+        def pick_and_mutate(usable, *a, **k):
+            seen_usable.append(dict(usable))
+            if len(seen_usable) == 1:
+                # mutate the reg file with a fresh mtime while menu is open
+                reg.write_text(
+                    '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\first]\n'
+                    '"HostName"="a.example.com"\n\n'
+                    '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\second]\n'
+                    '"HostName"="b.example.com"\n', encoding="utf-8")
+                import os
+                stamp = putty.file_stamp(reg)
+                os.utime(reg, ns=(stamp[1] + 10**9, stamp[1] + 10**9))
+                return "first"  # choose ACTION_BACK path
+            return None  # cancel on second pass
+
+        monkeypatch.setattr(putty, "pick_session_interactive", pick_and_mutate)
+        monkeypatch.setattr(putty, "pick_action", lambda *a, **k: putty.ACTION_BACK)
+
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(err):
+            rc = putty.main([])
+
+        assert rc == 0
+        assert "second" not in seen_usable[0]     # first snapshot: before
+        assert "second" in seen_usable[1]         # reloaded: after
+        assert ".reg file changed" in err.getvalue()
