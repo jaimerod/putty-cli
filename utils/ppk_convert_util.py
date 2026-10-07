@@ -26,7 +26,7 @@ def convert_ppk_to_openssh(ppk_path: str) -> Optional[str]:
 
     cached = _cached_key(ppk_file)
     if cached is not None:
-        return cached
+        return str(cached)
 
     tmp_path = None
     try:

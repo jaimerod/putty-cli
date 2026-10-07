@@ -567,12 +567,33 @@ class TestPpkConvert:
 
         first = convert_ppk_to_openssh(ppk)
         assert first is not None
+        assert isinstance(first, str)  # regression: cache hit must be str
         assert str(cache) in first  # installed into cache
         mtime = Path(first).stat().st_mtime_ns
 
         second = convert_ppk_to_openssh(ppk)
-        assert second == str(Path(first).resolve()) or str(cache) in str(second)
+        assert isinstance(second, str)  # not a Path
+        assert second == first
         assert Path(first).stat().st_mtime_ns == mtime  # not rewritten
+
+    def test_cached_key_feeds_build_ssh_command(self, monkeypatch, tmp_path):
+        """Regression: a warm cache + build_ssh_command must not raise
+        TypeError from shlex.quote(PosixPath)."""
+        from utils import ssh_command_util as scu
+        cache = self._scratch_cache(monkeypatch, tmp_path)
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        keys_dir = tmp_path / "keys"
+        keys_dir.mkdir()
+        shutil.copy(PPK_FIXTURE, keys_dir / "id.ppk")
+        reg = tmp_path / "putty.reg"
+        reg.touch()
+        session = {"HostName": "h", "PublicKeyFile": "keys/id.ppk"}
+
+        argv1, key1 = build_ssh_command("s", session, reg_path=reg)  # miss
+        argv2, key2 = build_ssh_command("s", session, reg_path=reg)  # hit
+        assert isinstance(key2, str)
+        assert key1 == key2
+        assert shlex.quote(key2) in " ".join(a for a in ssh_tokens(argv2))
 
     def test_cache_invalidated_on_mtime_change(self, monkeypatch, tmp_path):
         cache = self._scratch_cache(monkeypatch, tmp_path)
