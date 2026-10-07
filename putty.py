@@ -138,6 +138,11 @@ def connect_to_session(
     try:
         result = subprocess.run(cmd, check=False)
         exit_code = result.returncode
+        # Phase 2: attach to the (already logged, already started) session.
+        # The launch was detached so pipe-pane was running before attach -
+        # the first screenful of output is never lost from the log.
+        if exit_code == 0 and looks_like_tmux_argv(cmd):
+            exit_code = attach_tmux_session(cmd)
     except FileNotFoundError:
         print("Error: 'ssh' or 'tmux' not found. Please install openssh-client and tmux.", file=sys.stderr)
         exit_code = 1
@@ -237,6 +242,39 @@ def pick_session_interactive(
         selected_display = menu_items[selected_index]
 
     return display_to_name[selected_display]
+
+
+def looks_like_tmux_argv(cmd: List[str]) -> bool:
+    """True if cmd is a detached tmux launch built by _wrap_tmux."""
+    return (
+        len(cmd) > 1 and cmd[0] == "tmux"
+        and cmd[1] in ("new-window", "new-session")
+        and "-d" in cmd
+    )
+
+
+def attach_tmux_session(launch_argv: List[str]) -> int:
+    """Phase 2 after a detached tmux launch: attach to the session/window.
+
+    Returns the attach exit code; 0 when attachment isn't applicable."""
+    # Target: the -n name of the launch (session name outside tmux,
+    # window name inside). Find the session created by the launch.
+    try:
+        name = launch_argv[launch_argv.index("-n") + 1]
+    except (ValueError, IndexError):
+        return 0
+    if os.environ.get("TMUX"):
+        # Inside tmux: new-window already attached our current client's
+        # focus only if switch-client was used; do it now.
+        argv = ["tmux", "switch-client", "-t", name]
+    else:
+        # Outside tmux: attach to the (self-destroying) session.
+        argv = ["tmux", "attach-session", "-t", name]
+    try:
+        result = subprocess.run(argv, check=False)
+        return result.returncode
+    except FileNotFoundError:
+        return 0
 
 
 ACTION_CONNECT = "Connect"

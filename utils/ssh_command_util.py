@@ -18,6 +18,54 @@ def safe_name(session_name: str) -> str:
     return sanitized or "session"
 
 
+def _convert_session_key(
+    ppk_file_str: str, reg_path: Optional[Path]
+) -> Tuple[Optional[str], Optional[str]]:
+    """Resolve a PublicKeyFile value and convert it to OpenSSH format.
+
+    Returns (converted_key_path_or_None, temp_key_or_None): temp_key is
+    set when the result is a throwaway temp file (not cache-managed).
+    """
+    ppk_path = _resolve_ppk_path(ppk_file_str, reg_path)
+    if not ppk_path:
+        print(f"  → Key file not found: {ppk_file_str}")
+        return None, None
+    print(f"  → Using key: {ppk_path}")
+    converted = convert_ppk_to_openssh(str(ppk_path))
+    if converted:
+        return converted, converted
+    print("  → Key conversion failed → will prompt for password")
+    return None, None
+
+
+def _resolve_ppk_path(ppk_file_str: str, reg_path: Optional[Path]) -> Optional[Path]:
+    """Find an existing .ppk file: absolute path, reg-relative, or
+    Windows drive-letter path under the WSL mount root."""
+    candidates = []
+    p = Path(ppk_file_str)
+    if p.is_file():
+        candidates.append(p)
+
+    rel = (reg_path.parent / ppk_file_str) if reg_path is not None else Path(ppk_file_str)
+    if rel.is_file():
+        candidates.append(rel)
+
+    # Windows drive-letter path like C:\Users\...: resolve under the
+    # WSL mount root.
+    if ':' in ppk_file_str[:3] and '\\' in ppk_file_str:
+        drive, rest = ppk_file_str.split(":", 1)
+        drive = drive.lower()
+        rest = rest.lstrip("\\").replace("\\", "/")
+        wsl_p = WSL_MNT_ROOT / drive / rest
+        if wsl_p.is_file():
+            candidates.append(wsl_p)
+
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
+
+
 def build_ssh_command(
     session_name: str,
     session: Dict[str, str],
@@ -34,6 +82,46 @@ def build_ssh_command(
     if "HostName" not in session or not session["HostName"].strip():
         return None, None
 
+    temp_key: Optional[str] = None
+    proto = session.get("Protocol", "ssh").strip().lower()
+
+    if proto == "mosh":
+        # Mosh session: user@host via mosh; port/key options mostly
+        # handled by mosh-server negotiation, so we pass just identity.
+        parts = ["mosh"]
+        user = session.get("UserName", "").strip()
+        host = session["HostName"].strip()
+        ssh_port = session.get("PortNumber", "22")
+        ssh_opts = []
+        if ssh_port != "22":
+            ssh_opts += ["-p", ssh_port]
+        ppk = session.get("PublicKeyFile", "").strip()
+        if ppk:
+            converted, temp_key = _convert_session_key(ppk, reg_path)
+            if converted:
+                ssh_opts += ["-i", converted]
+        if ssh_opts:
+            parts.append("--ssh=" + shlex.join(["ssh"] + ssh_opts))
+        parts.append(f"{user}@{host}" if user else host)
+        # fall through to the shared tmux/log wrapper below
+    else:
+        parts, temp_key = _build_ssh_argv(session, reg_path)
+
+    if not tmux:
+        # Bare argv (clipboard copy, dry-run display, no-tmux mode).
+        # Skip log-dir makedirs side effect.
+        return parts, temp_key
+
+    return _wrap_tmux(parts, session_name, reg_path), temp_key
+
+
+def _build_ssh_argv(
+    session: Dict[str, str], reg_path: Optional[Path]
+) -> Tuple[List[str], Optional[str]]:
+    """Build the plain ssh argv for an ssh-protocol session.
+
+    Returns (parts, temp_key)."""
+    temp_key: Optional[str] = None
     parts = ["ssh"]
 
     port = session.get("PortNumber", "22")
@@ -69,57 +157,44 @@ def build_ssh_command(
     else:
         parts.append(host)
 
-    temp_key = None
     ppk_file_str = session.get("PublicKeyFile", "").strip()
     if ppk_file_str:
-        candidates = []
-        p = Path(ppk_file_str)
-        if p.is_file():
-            candidates.append(p)
-
-        rel = (reg_path.parent / ppk_file_str) if reg_path is not None else Path(ppk_file_str)
-        if rel.is_file():
-            candidates.append(rel)
-
-        # Windows drive-letter path like C:\Users\...: resolve under the
-        # WSL mount root (guard guarantees the colon, so split is safe).
-        if ':' in ppk_file_str[:3] and '\\' in ppk_file_str:
-            drive, rest = ppk_file_str.split(":", 1)
-            drive = drive.lower()
-            rest = rest.lstrip("\\").replace("\\", "/")
-            wsl_p = WSL_MNT_ROOT / drive / rest
-            if wsl_p.is_file():
-                candidates.append(wsl_p)
-
-        ppk_path = None
-        for cand in candidates:
-            if cand.is_file():
-                ppk_path = cand
-                break
-
-        if ppk_path:
-            print(f"  → Using key: {ppk_path}")
-            converted = convert_ppk_to_openssh(str(ppk_path))
-            if converted:
-                parts.extend(["-i", converted])
-                temp_key = converted
-            else:
-                print("  → Key conversion failed → will prompt for password")
-        else:
-            print(f"  → Key file not found: {ppk_file_str}")
+        converted, temp_key = _convert_session_key(ppk_file_str, reg_path)
+        if converted:
+            parts.extend(["-i", converted])
 
     remote_cmd = session.get("RemoteCommand", "").strip()
     if remote_cmd:
         parts.insert(1, "-t")
         parts.append(remote_cmd)
 
-    if not tmux:
-        # Bare ssh argv (clipboard copy, dry-run display, no-tmux mode).
-        # log dir is not needed; skip makedirs side effect.
-        return parts, temp_key
+    # Extra ssh args from PuTTY's CommandLineArgs session key
+    # (Connection > SSH > Command line "Remote command/arguments" box).
+    # Shlex-split so multi-word options arrive as separate argv tokens.
+    extra_args = session.get("CommandLineArgs", "").strip()
+    if extra_args:
+        try:
+            parts.extend(shlex.split(extra_args))
+        except ValueError as e:
+            print(f"  → Warning: ignoring malformed CommandLineArgs: {e}",
+                  file=sys.stderr)
 
-    # Log dir: PUTTY_LOG_DIR overrides; default to the directory holding the
-    # .reg file (so it follows whatever file the user configured).
+    return parts, temp_key
+
+
+def _wrap_tmux(
+    parts: List[str], session_name: str, reg_path: Optional[Path],
+) -> List[str]:
+    """Wrap an argv in a tmux launch that pipes the pane to a log file.
+
+    In tmux: opens a new window. Outside: a self-destroying new session.
+    tmux accepts commands separated by ';' as plain argv tokens, so no
+    shell is invoked - injection-safe by construction.
+
+    Launch is detached (-d) with pipe-pane started immediately, so the
+    log captures the session from the first screenful; putty.py then
+    attaches explicitly.
+    """
     timestamp = time.strftime("%Y-%m-%d_%H%M")
     log_dir = os.environ.get("PUTTY_LOG_DIR")
     if not log_dir:
@@ -130,19 +205,10 @@ def build_ssh_command(
     os.makedirs(log_dir, exist_ok=True)
     log_file = f"{log_dir}/{timestamp}-{safe_name(session_name)}.log"
 
-    # tmux runs its pane command via the user's shell, so both the window
-    # name and every piece of shell text must be quoted with shlex.quote.
-    argv = [
-        "tmux",
-        "new-window" if os.environ.get("TMUX") else "new-session",
-        "-n", safe_name(session_name),
-        " ".join(shlex.quote(a) for a in parts),
-        ";",
-    ]
-    if not os.environ.get("TMUX"):
-        # Not in tmux: create a session that self-destroys when detached.
-        argv += ["set-option", "destroy-unattached", "on", ";"]
-    # In tmux: pipe the new window's output to the log file.
-    argv += ["pipe-pane", "-o", f"cat >> {shlex.quote(log_file)}"]
-
-    return argv, temp_key
+    in_tmux = bool(os.environ.get("TMUX"))
+    name = safe_name(session_name)
+    argv = ["tmux"]
+    argv += ["new-window", "-d"] if in_tmux else ["new-session", "-d"]
+    argv += ["-n", name, " ".join(shlex.quote(a) for a in parts), ";"]
+    argv += ["pipe-pane", "-t", name, "-o", f"cat >> {shlex.quote(log_file)}"]
+    return argv

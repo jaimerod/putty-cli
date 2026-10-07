@@ -809,6 +809,126 @@ class TestBuildSshCommand:
         assert safe_name("normal-session_1.0") == "normal-session_1.0"
 
 
+# ── Mosh (item 6) + CommandLineArgs (item 5) ─────────────────────────────────
+
+class TestMoshAndExtraArgs:
+    def test_wrap_tmux_detached_two_phase(self, tmp_path, monkeypatch):
+        """Fixes first-screenful loss: launch is detached (-d), pipe-pane
+        started in the same command, attach happens as a separate call."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.delenv("TMUX", raising=False)
+        argv, _ = build_ssh_command(
+            "s", {"HostName": "h"}, reg_path=tmp_path / "r.reg", tmux=True,
+        )
+        assert argv[:2] == ["tmux", "new-session"]
+        assert "-d" in argv
+        # pipe-pane comes right after the launch command's ';'
+        pp_idx = argv.index("pipe-pane")
+        assert argv[pp_idx + 1] == "-t"
+        # and the argv contains NO shell (no 'sh','-c')
+        assert "sh" not in argv[:3]
+
+    def test_attach_tmux_session_outside(self, monkeypatch, tmp_path):
+        import subprocess as sp
+        launches = []
+        monkeypatch.setattr(
+            sp, "run",
+            lambda argv, **k: launches.append(argv)
+            or sp.CompletedProcess(argv, 0),
+        )
+        from putty import attach_tmux_session
+        rc = attach_tmux_session(
+            ["tmux", "new-session", "-d", "-n", "s", "ssh h", ";", "pipe-pane"])
+        assert rc == 0
+        launches[-1][:3] == ["tmux", "attach-session", "-t"]
+
+    def test_attach_tmux_session_inside(self, monkeypatch, tmp_path):
+        import subprocess as sp
+        launches = []
+        monkeypatch.setattr(
+            sp, "run",
+            lambda argv, **k: launches.append(argv)
+            or sp.CompletedProcess(argv, 0),
+        )
+        monkeypatch.setenv("TMUX", "/tmp/x,0,0")
+        from putty import attach_tmux_session
+        rc = attach_tmux_session(
+            ["tmux", "new-window", "-d", "-n", "w", "ssh h", ";", "pipe-pane"])
+        assert rc == 0
+        assert launches[-1][:3] == ["tmux", "switch-client", "-t"]
+
+    def test_attach_no_name_noop(self):
+        from putty import attach_tmux_session
+        assert attach_tmux_session(["tmux", "new-session"]) == 0
+
+    def test_mosh_basic(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, tk = build_ssh_command(
+            "m", {"HostName": "h.example.com", "Protocol": "mosh"},
+            reg_path=tmp_path / "r.reg", tmux=False,
+        )
+        assert argv[0] == "mosh"
+        assert "h.example.com" in argv
+        assert tk is None
+
+    def test_mosh_user_port_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        keys_dir = tmp_path / "keys"
+        keys_dir.mkdir()
+        shutil.copy(PPK_FIXTURE, keys_dir / "id.ppk")
+        argv, tk = build_ssh_command(
+            "m",
+            {"HostName": "h.example.com", "Protocol": "mosh", "UserName": "u",
+             "PortNumber": "2222", "PublicKeyFile": "keys/id.ppk"},
+            reg_path=tmp_path / "r.reg", tmux=False,
+        )
+        assert argv[0] == "mosh"
+        ssh_flag = next(a for a in argv if a.startswith("--ssh="))
+        assert "-p" in ssh_flag
+        assert "-i" in ssh_flag
+        assert tk is not None
+        Path(tk).unlink(missing_ok=True)
+
+    def test_mosh_tmux_wrapper(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, _ = build_ssh_command(
+            "m", {"HostName": "h", "Protocol": "mosh"},
+            reg_path=tmp_path / "r.reg", tmux=True,
+        )
+        assert argv[0] == "tmux"
+        assert any(a.startswith("mosh ") or a == "mosh" for a in argv)
+
+    def test_commandline_args_passthrough(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, _ = build_ssh_command(
+            "s",
+            {"HostName": "h", "CommandLineArgs": "-o Compression=yes -L 8080:localhost:80"},
+            reg_path=tmp_path / "r.reg", tmux=False,
+        )
+        tokens = shlex.split(" ".join(argv))
+        assert "-o" in tokens and "Compression=yes" in tokens
+        assert "-L" in tokens and "8080:localhost:80" in tokens
+
+    def test_commandline_args_malformed_warns(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, _ = build_ssh_command(
+            "s",
+            {"HostName": "h", "CommandLineArgs": "-o 'unterminated"},
+            reg_path=tmp_path / "r.reg", tmux=False,
+        )
+        assert "Warning" in capsys.readouterr().err
+        assert "-o" not in argv  # malformed args not half-applied
+
+    def test_commandline_args_ignored_for_mosh(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, _ = build_ssh_command(
+            "m",
+            {"HostName": "h", "Protocol": "mosh", "CommandLineArgs": "-o X=yes"},
+            reg_path=tmp_path / "r.reg", tmux=False,
+        )
+        assert "-o" not in argv
+
+
 # ── PPK conversion + cache ───────────────────────────────────────────────────
 
 class TestPpkConvert:
