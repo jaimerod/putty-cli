@@ -137,9 +137,11 @@ def main() -> None:
 
     try:
         result = subprocess.run(cmd, check=False)
-        # Only update recents on successful exit (code 0)
-        if result.returncode == 0:
-            update_recent_sessions(recent_file, selected_name)
+        # Record the session on any normal exit, including ssh failures
+        # (255 = connection refused/timeout) so failed hosts stay handy
+        # for a quick retry. tmux launch failure (see FileNotFoundError
+        # below) is NOT recorded - the session never actually opened.
+        update_recent_sessions(recent_file, selected_name)
     except FileNotFoundError:
         print("Error: 'ssh' or 'tmux' not found. Please install openssh-client and tmux.", file=sys.stderr)
     finally:

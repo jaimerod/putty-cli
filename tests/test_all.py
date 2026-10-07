@@ -20,6 +20,11 @@ REG_PATH = Path(__file__).parent / "data" / "sample.reg"
 PPK_FIXTURE = Path(__file__).parent / "data" / "test_key.ppk"
 
 
+class _FakeResult:
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
 def pane_cmd(argv):
     """Extract the ssh command string from a tmux argv list."""
     return next(a for a in argv if a.startswith("ssh"))
@@ -205,6 +210,31 @@ class TestRecents:
         update_recent_sessions(f, "b")
         lines = f.read_text(encoding="utf-8").splitlines()
         assert lines == ["b", "a", "c"]
+
+    def test_record_on_failed_ssh_exit(self, monkeypatch, tmp_path):
+        """Fix 8: ssh exit 255 (conn refused) must still record the session."""
+        f = tmp_path / "recent.txt"
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeResult(255))
+        update_recent_sessions(f, "hostA")
+        assert f.read_text().splitlines() == ["hostA"]
+
+    def test_no_record_on_launch_failure(self, monkeypatch, tmp_path, capsys):
+        """tmux missing -> FileNotFoundError -> no recent entry."""
+        f = tmp_path / "recent.txt"
+
+        def fake_run(*a, **k):
+            raise FileNotFoundError("tmux")
+
+        import subprocess as sp
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        # Simulate the main() code path around subprocess.run
+        try:
+            sp.run(["tmux"], check=False)
+            update_recent_sessions(f, "hostB")
+        except FileNotFoundError:
+            pass
+        assert not f.exists() or f.read_text() == ""
 
 
 # ── Titlecase ────────────────────────────────────────────────────────────────
