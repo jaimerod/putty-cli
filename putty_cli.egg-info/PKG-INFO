@@ -1,0 +1,93 @@
+Metadata-Version: 2.4
+Name: putty-cli
+Version: 1.0.0
+Summary: PuTTY .reg export -> fuzzy menu -> native ssh, with .ppk conversion, tmux logging and jump-host support
+Author: Jaime
+License: MIT
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: simple-term-menu>=1.6
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-cov>=5; extra == "dev"
+Requires-Dist: mypy>=1.10; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"
+Requires-Dist: bandit>=1.7; extra == "dev"
+Requires-Dist: pre-commit>=3.7; extra == "dev"
+Requires-Dist: pip-tools>=7; extra == "dev"
+
+# putty-cli
+
+Reads a PuTTY `.reg` export on Linux/WSL, shows a fuzzy-searchable session
+menu, and connects with native `ssh` — including `.ppk` key conversion,
+jump-host proxies, and remote commands.
+
+## Requirements
+
+- Linux or WSL
+- `python3` (3.9+) with a venv
+- `openssh-client` and `tmux`
+- `putty-tools` (`sudo apt install putty-tools`) — only needed for sessions
+  that reference `.ppk` keys
+
+## Setup
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env      # then edit to your paths
+./putty.py
+```
+
+## Configuration
+
+All config comes from environment variables. Values may live in a `.env`
+file (see `.env.example`), which is looked up next to the repository root,
+then in `~/.putty-cli/.env`. Real environment variables always take
+precedence over `.env` values.
+
+| Variable          | Required | Meaning                                                                    |
+|-------------------|----------|----------------------------------------------------------------------------|
+| `PUTTY_REG_PATH`  | yes      | Path to the PuTTY `.reg` export file                                        |
+| `PUTTY_LOG_DIR`   | no       | Where tmux session logs are written. Default: directory containing the `.reg` file, falling back to `~/.putty-cli/logs` |
+| `PUTTY_PPK_CACHE_DIR` | no   | Cache location for converted OpenSSH keys. Default: `~/.cache/putty-cli/keys` |
+
+## How it works
+
+1. Parses `[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\...]`
+   entries from the `.reg` file (UTF-16 or UTF-8, with or without BOM).
+2. Shows a `simple-term-menu` list: recent sessions first, then everything
+   sorted. Type to filter, `/` for search, Enter to connect, Esc to quit.
+3. Builds the ssh command:
+   - `UserName@HostName`, `-p PortNumber`
+   - `ProxyMethod 6` (PuTTY "local" proxy) → `ssh -J`
+   - `PublicKeyFile` → converted to OpenSSH format via `puttygen`,
+     cached by path+mtime, passed as `-i`
+   - `RemoteCommand` → `ssh -t <command>`
+4. Runs the session inside tmux (`new-window` if already in tmux,
+   otherwise a self-destroying `new-session`), piping the session output
+   to a timestamped log file.
+
+Session names beginning with `xxx` are treated as archived and hidden
+from the menu.
+
+## Logs
+
+Each connection writes everything shown in the terminal to a timestamped
+log file in `PUTTY_LOG_DIR`. **These logs capture all session output,
+including anything you type or paste, such as passwords.** Redirect
+`PUTTY_LOG_DIR` if that is a concern and clean the directory regularly.
+
+## Development
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest --cov=utils --cov=putty
+```
+
+The test suite covers the reg parser (encodings, edge cases), menu display,
+recents, PPK conversion/caching, and ssh command building — including
+regression tests that shell metacharacters in PuTTY session data can never
+escape the tmux/ssh command construction.
