@@ -1,0 +1,17 @@
+#!/usr/bin/env zsh
+# putty-cli launcher: works from anywhere; owns its venv.
+# Symlink into PATH: ln -s ~/path/to/putty-cli/bin/putty-cli ~/.local/bin/putty-cli
+
+set -euo pipefail
+
+REPO_DIR="${PUTTY_CLI_HOME:-$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)}"
+
+VENV="$REPO_DIR/.venv"
+if [ ! -x "$VENV/bin/python" ]; then
+    echo "putty-cli: creating venv at $VENV..."
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install --quiet --upgrade pip
+    "$VENV/bin/pip" install --quiet -e "$REPO_DIR"
+fi
+
+exec "$VENV/bin/putty-cli" "$@"

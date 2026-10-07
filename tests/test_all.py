@@ -368,6 +368,14 @@ class TestDotenv:
 # ── Recents coverage gaps ────────────────────────────────────────────────────
 
 class TestRecentsEdgeCases:
+    def test_wrapper_script_is_executable_and_targets_repo(self):
+        """bin/putty-cli: executable, resolves repo dir from its own path."""
+        wrapper = Path(__file__).resolve().parent.parent / "bin" / "putty-cli"
+        import os
+        assert os.access(wrapper, os.X_OK)
+        content = wrapper.read_text()
+        assert "exec" in content
+        assert "venv" in content
     def test_load_creates_missing_file(self, tmp_path):
         f = tmp_path / "recent.txt"
         assert not f.exists()
