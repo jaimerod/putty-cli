@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y putty-tools tmux
+
+      - name: Install python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock -r requirements.txt
+
+      - name: Run tests with coverage gate
+        run: pytest --cov=utils --cov=putty --cov-report=term --cov-fail-under=90
+
+      - name: Mypy
+        run: mypy utils putty.py
+        if: matrix.python == '3.12'
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff bandit
+      - run: ruff check .
+      - run: bandit -c pyproject.toml -r utils putty.py
