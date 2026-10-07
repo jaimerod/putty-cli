@@ -1,29 +1,47 @@
-from pathlib import Path
 import re
-import sys
+from pathlib import Path
 from typing import Dict
 
+SESSION_HEADER_RE = re.compile(
+    r'^\[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\(.+?)\]$',
+    re.IGNORECASE,
+)
+VALUE_RE = re.compile(r'^"([^"]+)"=(.+)$')
+
+
+def _read_reg_text(file_path: Path) -> str:
+    """Read a .reg file: BOM-sniff UTF-16, detect BOM-less UTF-16LE (null
+    bytes early in the file), otherwise treat as UTF-8."""
+    data = file_path.read_bytes()
+    if data.startswith(b"\xff\xfe"):
+        return data.decode("utf-16", errors="replace")
+    if data.startswith(b"\xfe\xff"):
+        return data.decode("utf-16-be", errors="replace")
+    if b"\x00" in data[:256]:
+        return data.decode("utf-16-le", errors="replace")
+    return data.decode("utf-8-sig", errors="replace")
+
+
 def parse_putty_reg(file_path: Path) -> Dict[str, Dict[str, str]]:
+    """Parse a PuTTY .reg export into {session_name: {key: value}}.
+
+    Raises FileNotFoundError if the file does not exist, and OSError
+    (or ValueError) if it cannot be read.
+    """
     if not file_path.is_file():
-        print(f"Error: .reg file not found → {file_path}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f".reg file not found: {file_path}")
+
+    content = _read_reg_text(file_path).replace("\r\n", "\n").lstrip("\ufeff")
 
     sessions: Dict[str, Dict[str, str]] = {}
     current_session = None
-
-    try:
-        content = file_path.read_text(encoding="utf-16-le", errors="replace")
-    except UnicodeDecodeError:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-
-    content = content.replace("\r\n", "\n").lstrip("\ufeff")
 
     for line in content.splitlines():
         line = line.strip()
         if not line:
             continue
 
-        m = re.match(r'^\[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\(.+?)\]$', line, re.IGNORECASE)
+        m = SESSION_HEADER_RE.match(line)
         if m:
             session_name = m.group(1).strip()
             sessions[session_name] = {}
@@ -33,7 +51,7 @@ def parse_putty_reg(file_path: Path) -> Dict[str, Dict[str, str]]:
         if current_session is None:
             continue
 
-        m_val = re.match(r'^"([^"]+)"=(.+)$', line)
+        m_val = VALUE_RE.match(line)
         if m_val:
             key = m_val.group(1).strip()
             val_raw = m_val.group(2).strip()

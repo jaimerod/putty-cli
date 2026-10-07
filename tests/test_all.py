@@ -50,6 +50,18 @@ class TestParsePuttyReg:
         sessions = parse_putty_reg(p)
         assert sessions["dev"]["HostName"] == "dev.example.com"
 
+    def test_parses_utf16le_without_bom(self, tmp_path):
+        p = write_reg(tmp_path, mini_session("dev", "dev.example.com"), "utf-16-le")
+        raw = p.read_bytes()
+        assert not raw.startswith(b"\xff\xfe")  # sanity: no BOM
+        sessions = parse_putty_reg(p)
+        assert sessions["dev"]["HostName"] == "dev.example.com"
+
+    def test_parses_utf16be(self, tmp_path):
+        p = write_reg(tmp_path, mini_session("dev", "dev.example.com"), "utf-16-be")
+        sessions = parse_putty_reg(p)
+        assert sessions["dev"]["HostName"] == "dev.example.com"
+
     def test_parses_utf8_with_bom(self, tmp_path):
         p = write_reg(tmp_path, mini_session("dev", "dev.example.com"), "utf-8-sig")
         sessions = parse_putty_reg(p)
@@ -64,7 +76,7 @@ class TestParsePuttyReg:
         sessions = parse_putty_reg(REG_PATH)
         assert set(sessions) == {
             "prod-web-1", "prod-db", "xxx-archived", "broken",
-            "Sessions%20with%20space", "jumphost-session", "socks-session",
+            "Foo%20Bar", "jumphost-session", "socks-session",
             "with-key", "with-remote-cmd",
         }
 

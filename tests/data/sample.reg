@@ -18,7 +18,7 @@ Windows Registry Editor Version 5.00
 "PortNumber"=dword:00000016
 "UserName"="nobody"
 
-[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions%20with%20space]
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Foo%20Bar]
 "HostName"="sp.example.com"
 
 [HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\jumphost-session]
