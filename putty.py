@@ -103,7 +103,9 @@ def main() -> None:
 
     print(f"\nSelected: {unquote_display(selected_name)}")
 
-    cmd, temp_key = build_ssh_command(unquote_display(selected_name), session)
+    cmd, temp_key = build_ssh_command(
+        unquote_display(selected_name), session, reg_path=REG_PATH
+    )
 
     if not cmd:
         print("Cannot build ssh command (missing hostname?).", file=sys.stderr)

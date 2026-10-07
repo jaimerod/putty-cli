@@ -5,9 +5,14 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from .ppk_convert_util import convert_ppk_to_openssh
 
-REG_PATH = Path("/mnt/c/Users/hiiam/OneDrive/Shared/portable/PuTTY/Data/settings/putty.reg").expanduser().resolve()
+from .ppk_convert_util import convert_ppk_to_openssh
 
-def build_ssh_command(session_name: str, session: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
+
+def build_ssh_command(
+    session_name: str,
+    session: Dict[str, str],
+    reg_path: Optional[Path] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     if "HostName" not in session or not session["HostName"].strip():
         return None, None
 
@@ -48,7 +53,7 @@ def build_ssh_command(session_name: str, session: Dict[str, str]) -> Tuple[Optio
         if p.is_file():
             candidates.append(p)
 
-        rel = REG_PATH.parent / ppk_file_str
+        rel = (reg_path.parent / ppk_file_str) if reg_path is not None else Path(ppk_file_str)
         if rel.is_file():
             candidates.append(rel)
 
@@ -89,9 +94,15 @@ def build_ssh_command(session_name: str, session: Dict[str, str]) -> Tuple[Optio
     base_cmd = " ".join(parts)
     safe_name = session_name.replace("'", "")
 
-    # Create a dedicated logs directory and a timestamped filename
+    # Log dir: PUTTY_LOG_DIR overrides; default to the directory holding the
+    # .reg file (so it follows whatever file the user configured).
     timestamp = time.strftime("%Y-%m-%d_%H%M")
-    log_dir = '/mnt/c/Users/hiiam/OneDrive/Shared/portable/PuTTY'
+    log_dir = os.environ.get("PUTTY_LOG_DIR")
+    if not log_dir:
+        if reg_path is not None:
+            log_dir = str(reg_path.parent)
+        else:
+            log_dir = str(Path.home() / ".putty-cli" / "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_file = f"{log_dir}/{timestamp}-{safe_name}.log"
 

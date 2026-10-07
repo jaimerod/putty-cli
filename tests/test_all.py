@@ -1,3 +1,4 @@
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from utils.ssh_command_util import build_ssh_command
 from utils.titlecase_util import smart_title, unquote_display
 
 REG_PATH = Path(__file__).parent / "data" / "sample.reg"
+PPK_FIXTURE = Path(__file__).parent / "data" / "test_key.ppk"
 
 REG_HEADER = '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\'
 
@@ -80,9 +82,7 @@ class TestParsePuttyReg:
 {REG_HEADER}b]
 "HostName"="b.example.com"
 """
-        sessions = parse_putty_reg(tmp_path / "two.reg") if False else parse_putty_reg(
-            write_reg(tmp_path, content, "utf-8")
-        )
+        sessions = parse_putty_reg(write_reg(tmp_path, content, "utf-8"))
         assert sessions["a"]["HostName"] == "a.example.com"
         assert sessions["b"]["HostName"] == "b.example.com"
 
@@ -231,3 +231,40 @@ class TestBuildSshCommand:
             "HostName": "c.example.com", "RemoteCommand": "htop",
         })
         assert "htop" in cmd
+
+    def test_no_hardcoded_user_paths(self):
+        cmd, _ = build_ssh_command("s", {"HostName": "h"})
+        assert "hiiam" not in cmd
+        assert "/mnt/c/Users" not in cmd
+
+    def test_log_dir_from_env(self, monkeypatch, tmp_path):
+        logdir = tmp_path / "mylogs"
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(logdir))
+        cmd, _ = build_ssh_command("s", {"HostName": "h.example.com"})
+        assert str(logdir) in cmd
+
+    def test_log_dir_defaults_to_reg_parent(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PUTTY_LOG_DIR", raising=False)
+        reg = tmp_path / "settings" / "putty.reg"
+        reg.parent.mkdir(parents=True)
+        reg.touch()
+        cmd, _ = build_ssh_command("s", {"HostName": "h"}, reg_path=reg)
+        assert f"{tmp_path}/settings" in cmd
+
+    def test_ppk_resolved_relative_to_reg_path(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("PUTTY_LOG_DIR", "/tmp/opencode/putty-test-logs")
+        reg = tmp_path / "putty.reg"
+        reg.touch()
+        keys_dir = tmp_path / "keys"
+        keys_dir.mkdir()
+        shutil.copy(PPK_FIXTURE, keys_dir / "id.ppk")
+        cmd, temp_key = build_ssh_command(
+            "s",
+            {"HostName": "h", "PublicKeyFile": "keys/id.ppk"},
+            reg_path=reg,
+        )
+        out = capsys.readouterr().out
+        assert str(keys_dir / "id.ppk") in out
+        assert temp_key is not None
+        Path(temp_key).unlink(missing_ok=True)
+        assert "-i" in cmd
