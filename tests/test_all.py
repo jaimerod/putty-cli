@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 import putty
-from utils.display_util import generate_menu_items, make_display_pair
+from utils.display_util import generate_menu_items, make_display_pair, separator
 from utils.env_util import load_dotenv
 from utils.ppk_convert_util import convert_ppk_to_openssh
 from utils.putty_parse_util import parse_putty_reg
@@ -620,7 +620,7 @@ class TestTagGrouping:
         items = list(generate_menu_items(sessions, []))
         names = [n for _, n in items if n is not None]
         headers = [d for d, n in items if n is None]
-        assert headers == ["── PROD ──", "── STAGING ──", "── OTHER ──"]
+        assert headers == [separator("PROD"), separator("STAGING"), separator("OTHER")]
         assert names == ["prod:web-1", "prod:web-2", "staging:web", "solo"]
 
     def test_flat_mode_no_tag_headers(self):
@@ -638,7 +638,7 @@ class TestTagGrouping:
         names = [n for _, n in items if n is not None]
         assert names[0] == "prod:a"  # under RECENT, not under PROD header
         headers = [d for d, _ in items if _ is None]
-        assert not any(d.startswith("── PROD") for d in headers)
+        assert not any("PROD" in d for d in headers[1:])
 
     def test_archived_toggle(self, capsys, monkeypatch):
         import io
@@ -1243,3 +1243,123 @@ class TestRecentsMetadata:
         inode_after = f.stat().st_ino
         assert inode_before != inode_after  # os.replace created a new file
         assert load_recent_sessions(f, {"x": {}, "seed": {}})[0] == "x"
+
+
+# ── Logs viewer (item 11) + dynamic separators (item 12) ─────────────────────
+
+class _FakeMenuClass:
+    """Stands in for TerminalMenu without needing a TTY."""
+
+    show_result = 0
+
+    def __init__(self, *a, **k):
+        pass
+
+    def show(self):
+        return _FakeMenuClass.show_result
+
+
+def _patch_menu(monkeypatch, result=0):
+    _FakeMenuClass.show_result = result
+    # pick_and_view_log imports TerminalMenu from simple_term_menu at call
+    # time, so patching the source module is the reliable seam.
+    monkeypatch.setattr("simple_term_menu.TerminalMenu", _FakeMenuClass)
+
+
+class TestLogsViewer:
+    def test_list_logs_newest_first(self, tmp_path):
+        from utils.logs_util import list_logs
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "old.log").write_text("x")
+        (d / "new.log").write_text("yy")
+        far_past = time.time() - 10000
+        import os
+        os.utime(d / "old.log", (far_past, far_past))
+        logs = list_logs(d)
+        assert [p.name for p, _, _ in logs] == ["new.log", "old.log"]
+
+    def test_list_logs_empty_dir(self, tmp_path):
+        from utils.logs_util import list_logs
+        assert list_logs(tmp_path) == []
+
+    def test_format_log_line(self):
+        from utils.logs_util import format_log_line
+        line = format_log_line(Path("2026-01-01_1200-myhost.log"), 2048, 0)
+        assert "myhost.log" in line and "2K" in line
+
+    def test_view_log_pager_invoked(self, tmp_path, monkeypatch):
+        from utils import logs_util
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.log").write_text("hello")
+        import subprocess as sp
+        calls = []
+        monkeypatch.setattr(sp, "run",
+                            lambda argv, **k: calls.append(argv)
+                            or sp.CompletedProcess(argv, 0))
+        monkeypatch.delenv("PAGER", raising=False)
+        _patch_menu(monkeypatch, result=0)
+        rc = logs_util.pick_and_view_log(d)
+        assert rc == 0
+        assert calls and calls[0][0] == "less"
+
+    def test_view_log_no_pager_dumps_stdout(self, tmp_path, monkeypatch, capsys):
+        from utils import logs_util
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.log").write_text("hello")
+        import subprocess as sp
+        monkeypatch.setattr(sp, "run",
+                            lambda argv, **k: (_ for _ in ()).throw(FileNotFoundError()))
+        _patch_menu(monkeypatch, result=0)
+        rc = logs_util.pick_and_view_log(d)
+        assert rc == 0
+        assert "hello" in capsys.readouterr().out
+
+    def test_view_log_empty(self, tmp_path, capsys):
+        from utils.logs_util import pick_and_view_log
+        assert pick_and_view_log(tmp_path) is None
+        assert "No session logs" in capsys.readouterr().err
+
+    def test_view_log_esc_returns_none(self, tmp_path, monkeypatch):
+        from utils import logs_util
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.log").write_text("x")
+        _patch_menu(monkeypatch, result=None)
+        assert logs_util.pick_and_view_log(d) is None
+
+    def test_cmdline_logs_flag(self, monkeypatch, tmp_path):
+        d = tmp_path / "logs"
+        d.mkdir()
+        (d / "a.log").write_text("hello")
+        _patch_menu(monkeypatch, result=None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = putty.main(["--logs", "--logs-dir", str(d)])
+        assert rc == 0  # Esc exits gracefully
+
+
+class TestDynamicSeparator:
+    def test_separator_explicit_width(self):
+        assert separator("TAG", width=20).startswith("── TAG")
+        assert len(separator("TAG", width=20)) == 20
+        assert separator("", width=10) == "─" * 10
+
+    def test_separator_min_80(self):
+        # text never truncated, line never exceeds terminal width
+        assert len(separator("X", width=10)) >= 4
+        assert separator("X", width=5).startswith("── X")
+        assert len(separator("", width=200)) == 200
+
+    def test_menu_uses_dynamic_separator(self, monkeypatch):
+        # Force a known terminal width
+        import shutil
+        monkeypatch.setattr(
+            shutil, "get_terminal_size", lambda fallback=(80, 24): __import__(
+                "shutil").os.terminal_size((123, 24)))
+        sessions = {"a": {"HostName": "a"}, "b": {"HostName": "b"}}
+        items = list(generate_menu_items(sessions, ["a"]))
+        sep = separator("", width=123)
+        assert sep in [d for d, _ in items]

@@ -78,6 +78,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="use fzf for session picking (if installed) instead of "
              "the built-in menu; falls back to the menu when absent",
     )
+    parser.add_argument(
+        "--logs", action="store_true",
+        help="browse recent session logs (open in $PAGER)",
+    )
+    parser.add_argument(
+        "--logs-dir", metavar="DIR", default=None,
+        help="log directory for --logs (default: $PUTTY_LOG_DIR resolution)",
+    )
     return parser
 
 
@@ -390,6 +398,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         for name in sorted(usable):
             print(name)
         return 0
+
+    if args.logs:
+        from utils.logs_util import pick_and_view_log
+        rc = pick_and_view_log(
+            Path(args.logs_dir).expanduser() if args.logs_dir else None
+        )
+        return rc if rc is not None else 0
 
     if args.connect is not None:
         if args.connect not in usable:

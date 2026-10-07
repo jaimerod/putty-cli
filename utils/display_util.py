@@ -1,6 +1,18 @@
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from .recent_sessions_util import format_relative_time
 from .titlecase_util import smart_title, unquote_display
+
+
+def separator(text: str = "", width: Optional[int] = None) -> str:
+    """A '── text ────...' header line sized to the terminal (min 80,
+    from shutil.get_terminal_size when width is None). Total line length
+    is exactly `width` when text fits."""
+    if width is None:
+        import shutil
+        width = max(80, shutil.get_terminal_size((80, 24)).columns)
+    prefix = f"── {text}" if text else ""
+    dashes = max(0, width - len(prefix))
+    return f"{prefix}{'─' * dashes}" if text else "─" * width
 
 
 def make_display_pair(name: str, session: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -52,7 +64,7 @@ def generate_menu_items(
     """
     # Header and items for recent sessions
     if recent_names:
-        yield "── RECENT SESSIONS ───────────────────────────────────────────────────────────", None
+        yield separator("RECENT SESSIONS"), None
         for name in recent_names:
             if name in sessions:
                 _, display, session_name = make_display_pair(name, sessions[name])
@@ -66,7 +78,7 @@ def generate_menu_items(
                 yield display, session_name
         # Separator if there are other sessions to show
         if len(sessions) > len(recent_names):
-            yield "──────────────────────────────────────────────────────────────────────────────", None
+            yield separator(), None
 
     remaining = [n for n in sorted(
         sessions.keys(), key=lambda n: smart_title(unquote_display(n)).lower()
@@ -89,12 +101,12 @@ def generate_menu_items(
             ungrouped.append(name)
 
     for tag in sorted(grouped):
-        yield f"── {tag.upper()} ──", None
+        yield separator(tag.upper()), None
         for name in grouped[tag]:
             _, display, session_name = make_display_pair(name, sessions[name])
             yield display, session_name
     if grouped and ungrouped:
-        yield "── OTHER ──", None
+        yield separator("OTHER"), None
     for name in ungrouped:
         _, display, session_name = make_display_pair(name, sessions[name])
         yield display, session_name
