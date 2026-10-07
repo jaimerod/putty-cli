@@ -30,17 +30,31 @@ except ImportError:
     sys.exit(1)
 
 # ─── Config ────────────────────────────────────────────────────────────────
-if "PUTTY_REG_PATH" not in os.environ:
-    print("Error: PUTTY_REG_PATH environment variable not set.", file=sys.stderr)
-    sys.exit(1)
+def resolve_reg_path() -> Path:
+    """Resolve the PuTTY .reg file path from PUTTY_REG_PATH.
 
-REG_PATH = Path(os.environ["PUTTY_REG_PATH"]).expanduser().resolve()
+    Raises SystemExit with a clear message if unset (called from main(),
+    not at import time, so this module stays importable for tests).
+    """
+    value = os.environ.get("PUTTY_REG_PATH")
+    if not value:
+        print("Error: PUTTY_REG_PATH environment variable not set.", file=sys.stderr)
+        sys.exit(1)
+    return Path(value).expanduser().resolve()
 # ───────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     """Main function to parse sessions, display menu, and handle connection."""
+    reg_path = resolve_reg_path()
     recent_file = Path.home() / ".putty_recent_sessions"
-    sessions: Dict[str, Dict[str, Any]] = parse_putty_reg(REG_PATH)
+    try:
+        sessions: Dict[str, Dict[str, Any]] = parse_putty_reg(reg_path)
+    except FileNotFoundError:
+        print(f"Error: .reg file not found: {reg_path}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        print(f"Error: cannot read .reg file {reg_path}: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if not sessions:
         print("No sessions found in .reg file.", file=sys.stderr)
@@ -104,7 +118,7 @@ def main() -> None:
     print(f"\nSelected: {unquote_display(selected_name)}")
 
     cmd, temp_key = build_ssh_command(
-        unquote_display(selected_name), session, reg_path=REG_PATH
+        unquote_display(selected_name), session, reg_path=reg_path
     )
 
     if not cmd:
