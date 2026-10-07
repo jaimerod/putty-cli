@@ -117,6 +117,42 @@ class TestParsePuttyReg:
         assert sessions["a"]["HostName"] == "a.example.com"
         assert sessions["b"]["HostName"] == "b.example.com"
 
+    def test_bad_dword_defaults_to_zero(self, tmp_path):
+        content = f'{REG_HEADER}dwordbad]\n"PortNumber"=dword:zzzz\n'
+        sessions = parse_putty_reg(write_reg(tmp_path, content, "utf-8"))
+        assert sessions["dwordbad"]["PortNumber"] == "0"
+
+    def test_other_value_types_passthrough(self, tmp_path):
+        # hex: and hex(b): style reg values land in the passthrough branch
+        content = (
+            f'{REG_HEADER}weird]\n'
+            '"TerminalType"=hex:00,01\n'
+            '"Weird"=hex(b):00,00,00,00,00,00,00,00\n'
+            '"Note"=no quotes here\n'
+        )
+        sessions = parse_putty_reg(write_reg(tmp_path, content, "utf-8"))
+        assert sessions["weird"]["TerminalType"] == "hex:00,01"
+        assert sessions["weird"]["Weird"] == "hex(b):00,00,00,00,00,00,00,00"
+        assert sessions["weird"]["Note"] == "no quotes here"
+
+    def test_bom_less_utf16be(self, tmp_path):
+        # \x00[ prefix is the utf-16be signature without BOM (line 17 branch)
+        p = tmp_path / "reg.reg"
+        p.write_text(mini_session("be", "be.example.com"), encoding="utf-16-be")
+        assert parse_putty_reg(p)["be"]["HostName"] == "be.example.com"
+
+    def test_utf16le_with_bom(self, tmp_path):
+        p = tmp_path / "reg.reg"
+        raw = mini_session("bom", "bom.example.com").encode("utf-16-le")
+        p.write_bytes(b"\xff\xfe" + raw)
+        assert parse_putty_reg(p)["bom"]["HostName"] == "bom.example.com"
+
+    def test_utf16be_with_bom(self, tmp_path):
+        p = tmp_path / "reg.reg"
+        raw = mini_session("bebom", "bebom.example.com").encode("utf-16-be")
+        p.write_bytes(b"\xfe\xff" + raw)
+        assert parse_putty_reg(p)["bebom"]["HostName"] == "bebom.example.com"
+
 
 # ── Display ──────────────────────────────────────────────────────────────────
 
@@ -284,6 +320,74 @@ class TestDotenv:
         path = env_util.load_dotenv()
         assert path == f
         assert os.environ["PUTTY_TEST_VAR2"] == "from_file"
+
+    def test_no_env_file_anywhere(self, monkeypatch):
+        from utils import env_util
+        monkeypatch.setattr(env_util, "_find_env_file", lambda: None)
+        assert env_util.load_dotenv() is None
+
+    def test_unreadable_env_file(self, monkeypatch, tmp_path):
+        from utils import env_util
+        f = tmp_path / ".env"
+        f.write_text("SHOULD_NOT_LOAD=1\n", encoding="utf-8")
+        monkeypatch.setattr(
+            type(f), "read_text",
+            lambda self, *a, **k: (_ for _ in ()).throw(OSError("denied")),
+        )
+        monkeypatch.setattr(env_util, "_find_env_file", lambda: f)
+        assert env_util.load_dotenv() is None
+
+    def test_parse_skips_malformed_lines(self):
+        from utils.env_util import _parse_env_file
+        # lines without '=' are skipped (line 18) via the no-equals branch
+        assert _parse_env_file("NOEQUALS\nA=1\n") == {"A": "1"}
+
+    def test_parse_skips_blank_and_comment_only(self):
+        from utils.env_util import _parse_env_file
+        assert _parse_env_file("") == {}
+        assert _parse_env_file("# only comment\n\n") == {}
+
+    def test_repo_root_and_home_candidates(self, monkeypatch, tmp_path):
+        """_find_env_file checks repo root of env_util, then ~/.putty-cli."""
+        from utils import env_util
+        # env_util lives in <repo>/utils/, so its parent is the repo root
+        repo_root = Path(env_util.__file__).resolve().parent.parent
+        monkeypatch.setattr(
+            env_util.Path, "is_file",
+            lambda p: str(p).endswith("/.env"),
+        )
+        found = env_util._find_env_file()
+        assert found == repo_root / ".env" or found == env_util.Path.home() / ".putty-cli" / ".env"
+
+    def test_find_env_file_none_when_missing(self, monkeypatch, tmp_path):
+        from utils import env_util
+        monkeypatch.setattr(env_util.Path, "is_file", lambda p: False)
+        assert env_util._find_env_file() is None
+
+
+# ── Recents coverage gaps ────────────────────────────────────────────────────
+
+class TestRecentsEdgeCases:
+    def test_load_creates_missing_file(self, tmp_path):
+        f = tmp_path / "recent.txt"
+        assert not f.exists()
+        assert load_recent_sessions(f, {"a": {}}) == []
+        assert f.exists()
+
+    def test_load_unreadable_file(self, tmp_path):
+        f = tmp_path / "recent.txt"
+        f.write_bytes(b"\xff\xfe\xff\xfe")  # invalid utf-8
+        assert load_recent_sessions(f, {"a": {}}) == []
+
+    def test_update_unwritable_file(self, tmp_path, monkeypatch):
+        f = tmp_path / "recent.txt"
+        f.write_text("a\n", encoding="utf-8")
+
+        def raise_oserror(self, *a, **k):
+            raise OSError("denied")
+
+        monkeypatch.setattr(type(f), "write_text", raise_oserror)
+        update_recent_sessions(f, "b")  # must not raise
 
 
 # ── SSH command building ─────────────────────────────────────────────────────
@@ -508,3 +612,156 @@ class TestPpkConvert:
         key = convert_ppk_to_openssh(ppk)
         assert key is not None
         assert (Path(key).stat().st_mode & 0o777) == 0o600
+
+    def test_cache_unavailable_falls_back_to_temp(self, monkeypatch, tmp_path):
+        """Unwritable cache dir -> keep a usable temp key instead of failing."""
+        cache = tmp_path / "ppkcache"
+        monkeypatch.setenv("PUTTY_PPK_CACHE_DIR", str(cache))
+        # Simulate unwritable cache: mkdir raises
+        import shutil as sh
+        real_mkdir = Path.mkdir
+        def fake_mkdir(self, *a, **k):
+            if str(self) == str(cache):
+                raise PermissionError("denied")
+            return real_mkdir(self, *a, **k)
+        monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
+            f.write(Path(PPK_FIXTURE).read_bytes())
+            ppk = f.name
+        key = convert_ppk_to_openssh(ppk)
+        assert key is not None
+        assert str(cache) not in key  # fell back to temp file outside cache
+        Path(key).unlink(missing_ok=True)
+
+    def test_puttygen_garbage_fails_clean(self, monkeypatch, tmp_path, capsys):
+        self._scratch_cache(monkeypatch, tmp_path)
+        bad = tmp_path / "bad.ppk"
+        bad.write_text("'\"; pwn\n")
+        assert convert_ppk_to_openssh(str(bad)) is None
+        assert "puttygen failed" in capsys.readouterr().err
+
+    def test_puttygen_missing_path(self, monkeypatch, tmp_path, capsys):
+        """subprocess raising FileNotFoundError -> friendly message, None."""
+        import subprocess as sp
+        self._scratch_cache(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("puttygen")),
+        )
+        src = tmp_path / "k.ppk"
+        shutil.copy(PPK_FIXTURE, src)
+        assert convert_ppk_to_openssh(str(src)) is None
+        assert "putty-tools" in capsys.readouterr().err
+
+    def test_unexpected_exception_cleanup(self, monkeypatch, tmp_path, capsys):
+        """A generic failure mid-conversion cleans up the tmp key."""
+        import subprocess as sp
+        self._scratch_cache(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            sp, "run",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        src = tmp_path / "k.ppk"
+        shutil.copy(PPK_FIXTURE, src)
+        assert convert_ppk_to_openssh(str(src)) is None
+        assert "Key conversion error" in capsys.readouterr().err
+        # no stray .key temp files left in the system temp dir
+        import glob
+        stray = [f for f in glob.glob("/tmp/tmp*.key")
+                 if time.time() - Path(f).stat().st_mtime < 5]
+        assert not stray
+
+
+class TestPpkPathResolution:
+    """Windows-style and relative PublicKeyFile path handling."""
+
+    def test_conversion_failure_fallthrough(self, monkeypatch, tmp_path, capsys):
+        """convert_ppk_to_openssh returning None -> no -i, warning printed."""
+        from utils import ssh_command_util as scu
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        keys_dir = tmp_path / "keys"
+        keys_dir.mkdir()
+        shutil.copy(PPK_FIXTURE, keys_dir / "id.ppk")
+        monkeypatch.setattr(scu, "convert_ppk_to_openssh", lambda p: None)
+        argv, temp_key = build_ssh_command(
+            "s",
+            {"HostName": "h", "PublicKeyFile": "keys/id.ppk"},
+            reg_path=tmp_path / "putty.reg",
+        )
+        assert "-i" not in ssh_tokens(argv)
+        assert temp_key is None
+        assert "conversion failed" in capsys.readouterr().out
+
+    def test_key_file_not_found_message(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, temp_key = build_ssh_command(
+            "s",
+            {"HostName": "h", "PublicKeyFile": "C:\\nope\\missing.ppk"},
+            reg_path=tmp_path / "putty.reg",
+        )
+        assert temp_key is None
+        assert "-i" not in ssh_tokens(argv)
+        assert "Key file not found" in capsys.readouterr().out
+
+    def test_windows_drive_path_resolved(self, monkeypatch, tmp_path, capsys):
+        """C:\\... style .ppk paths resolve under the WSL mount root."""
+        from utils import ssh_command_util as scu
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setattr(scu, "WSL_MNT_ROOT", tmp_path)  # acts as /mnt
+        c_drive = tmp_path / "c" / "keys"
+        c_drive.mkdir(parents=True)
+        shutil.copy(PPK_FIXTURE, c_drive / "id.ppk")
+        argv, temp_key = build_ssh_command(
+            "s",
+            {"HostName": "h", "PublicKeyFile": "C:\\keys\\id.ppk"},
+            reg_path=tmp_path / "putty.reg",
+        )
+        out = capsys.readouterr().out
+        assert "Using key" in out
+        assert temp_key is not None
+        Path(temp_key).unlink(missing_ok=True)
+
+    def test_absolute_posix_path_preferred(self, monkeypatch, tmp_path, capsys):
+        """An existing absolute path is used before reg-relative lookup."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        abs_key = tmp_path / "abs.ppk"
+        shutil.copy(PPK_FIXTURE, abs_key)
+        reg_dir_key = tmp_path / "regdir.ppk"
+        shutil.copy(PPK_FIXTURE, reg_dir_key)
+        argv, temp_key = build_ssh_command(
+            "s",
+            {"HostName": "h", "PublicKeyFile": str(abs_key)},
+            reg_path=tmp_path / "putty.reg",
+        )
+        assert temp_key is not None
+        assert "abs.ppk" in capsys.readouterr().out
+        Path(temp_key).unlink(missing_ok=True)
+
+    def test_malformed_windows_path_guard(self, monkeypatch, tmp_path, capsys):
+        """A ':' / '\\' path that breaks split() must not kill the build."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        # single-char path with ':' and '\' triggers the ValueError branch
+        argv, temp_key = build_ssh_command(
+            "s", {"HostName": "h", "PublicKeyFile": ":\\"},
+            reg_path=None,
+        )
+        assert temp_key is None
+        assert "Key file not found" in capsys.readouterr().out
+
+    def test_windows_path_exactly_three_chars(self, monkeypatch, tmp_path, capsys):
+        """Drive-prefix check bounds: ':' must be within first 3 chars."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        # colon beyond 3rd char -> wsl branch skipped entirely
+        argv, temp_key = build_ssh_command(
+            "s", {"HostName": "h", "PublicKeyFile": "ab:c\\d"},
+            reg_path=None,
+        )
+        assert temp_key is None
+
+    def test_log_dir_falls_back_to_home(self, monkeypatch, tmp_path):
+        """No env var and no reg_path -> ~/.putty-cli/logs."""
+        from utils import ssh_command_util as scu
+        monkeypatch.delenv("PUTTY_LOG_DIR", raising=False)
+        argv, _ = build_ssh_command("s", {"HostName": "h"}, reg_path=None)
+        assert str(Path.home() / ".putty-cli" / "logs") in " ".join(argv)

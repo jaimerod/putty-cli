@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from .ppk_convert_util import convert_ppk_to_openssh
 
+# Root under which Windows drives appear (WSL). Injectable for tests.
+WSL_MNT_ROOT = Path("/mnt")
+
 
 def safe_name(session_name: str) -> str:
     """Sanitize a session name for use in log file names."""
@@ -76,16 +79,15 @@ def build_ssh_command(
         if rel.is_file():
             candidates.append(rel)
 
+        # Windows drive-letter path like C:\Users\...: resolve under the
+        # WSL mount root (guard guarantees the colon, so split is safe).
         if ':' in ppk_file_str[:3] and '\\' in ppk_file_str:
-            try:
-                drive, rest = ppk_file_str.split(":", 1)
-                drive = drive.lower()
-                rest = rest.lstrip("\\").replace("\\", "/")
-                wsl_p = Path(f"/mnt/{drive}") / rest
-                if wsl_p.is_file():
-                    candidates.append(wsl_p)
-            except ValueError:
-                pass
+            drive, rest = ppk_file_str.split(":", 1)
+            drive = drive.lower()
+            rest = rest.lstrip("\\").replace("\\", "/")
+            wsl_p = WSL_MNT_ROOT / drive / rest
+            if wsl_p.is_file():
+                candidates.append(wsl_p)
 
         ppk_path = None
         for cand in candidates:
