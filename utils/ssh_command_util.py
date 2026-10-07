@@ -2,17 +2,29 @@ import os
 import shlex
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from .ppk_convert_util import convert_ppk_to_openssh
 
-from .ppk_convert_util import convert_ppk_to_openssh
+
+def safe_name(session_name: str) -> str:
+    """Sanitize a session name for use in log file names."""
+    sanitized = "".join(
+        c if c.isalnum() or c in "-_." else "_" for c in session_name
+    )
+    return sanitized or "session"
 
 
 def build_ssh_command(
     session_name: str,
     session: Dict[str, str],
     reg_path: Optional[Path] = None,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Build the tmux command that opens an ssh session.
+
+    Returns (argv, temp_key_path) where argv is a list safe to pass to
+    subprocess.run(shell=False). Returns (None, None) if the session has
+    no usable HostName.
+    """
     if "HostName" not in session or not session["HostName"].strip():
         return None, None
 
@@ -39,12 +51,6 @@ def build_ssh_command(
     else:
         parts.append(host)
 
-    proto = session.get("Protocol", "ssh").lower()
-    if proto == "ssh1":
-        parts.insert(1, "-1")
-    elif proto == "ssh2":
-        parts.insert(1, "-2")
-
     temp_key = None
     ppk_file_str = session.get("PublicKeyFile", "").strip()
     if ppk_file_str:
@@ -65,7 +71,7 @@ def build_ssh_command(
                 wsl_p = Path(f"/mnt/{drive}") / rest
                 if wsl_p.is_file():
                     candidates.append(wsl_p)
-            except:
+            except ValueError:
                 pass
 
         ppk_path = None
@@ -88,11 +94,7 @@ def build_ssh_command(
     remote_cmd = session.get("RemoteCommand", "").strip()
     if remote_cmd:
         parts.insert(1, "-t")
-        parts.append(f'"{remote_cmd}"')
-
-    # Build the base SSH command
-    base_cmd = " ".join(parts)
-    safe_name = session_name.replace("'", "")
+        parts.append(remote_cmd)
 
     # Log dir: PUTTY_LOG_DIR overrides; default to the directory holding the
     # .reg file (so it follows whatever file the user configured).
@@ -104,14 +106,21 @@ def build_ssh_command(
         else:
             log_dir = str(Path.home() / ".putty-cli" / "logs")
     os.makedirs(log_dir, exist_ok=True)
-    log_file = f"{log_dir}/{timestamp}-{safe_name}.log"
+    log_file = f"{log_dir}/{timestamp}-{safe_name(session_name)}.log"
 
-    # Check if we are currently inside a tmux session
-    if os.environ.get("TMUX"):
-        # In tmux: Open new window and instantly start piping output to the log file
-        cmd = f"tmux new-window -n '{safe_name}' '{base_cmd}' \\; pipe-pane -o 'cat >> \"{log_file}\"'"
-    else:
-        # Not in tmux: Create wrapper, set auto-destroy, and pipe output
-        cmd = f"tmux new-session -n '{safe_name}' '{base_cmd}' \\; set-option destroy-unattached on \\; pipe-pane -o 'cat >> \"{log_file}\"'"
+    # tmux runs its pane command via the user's shell, so both the window
+    # name and every piece of shell text must be quoted with shlex.quote.
+    argv = [
+        "tmux",
+        "new-window" if os.environ.get("TMUX") else "new-session",
+        "-n", safe_name(session_name),
+        " ".join(shlex.quote(a) for a in parts),
+        ";",
+    ]
+    if not os.environ.get("TMUX"):
+        # Not in tmux: create a session that self-destroys when detached.
+        argv += ["set-option", "destroy-unattached", "on", ";"]
+    # In tmux: pipe the new window's output to the log file.
+    argv += ["pipe-pane", "-o", f"cat >> {shlex.quote(log_file)}"]
 
-    return cmd, temp_key
+    return argv, temp_key

