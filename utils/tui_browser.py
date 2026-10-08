@@ -9,6 +9,7 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from textual import events
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -133,6 +134,18 @@ class _SessionItem(ListItem):
     def __init__(self, row: SessionRow, *widgets: Any) -> None:
         super().__init__(*widgets)
         self.row = row
+
+
+async def app_push_screen(
+    app: "SessionBrowser", modal: Any, session_name: str
+) -> None:
+    """Push a modal and dispatch its dismiss result (Textual 8: awaiting
+    push_screen() waits for MOUNT, not the result - callback form is the
+    only way to receive the dismiss value without a worker)."""
+    def on_result(action: Optional[str]) -> None:
+        app.call_later(app._run_chosen_action, action, session_name)
+
+    app.push_screen(modal, callback=on_result)  # type: ignore[arg-type]
 
 
 class SessionBrowser(App[int]):
@@ -276,6 +289,50 @@ class SessionBrowser(App[int]):
         if isinstance(event.item, _SessionItem):
             self.selected_name = event.item.row.name
             await self.action_connect()
+
+    async def on_click(self, event: "events.Click") -> None:
+        """Right-click (button 3) on a session row opens the action modal."""
+        if event.button != 3:
+            return
+        # find the session row under the cursor (walk up the widget tree)
+        widget = event.widget
+        while widget is not None and not isinstance(widget, _SessionItem):
+            widget = widget.parent
+        if widget is None or not isinstance(widget, _SessionItem):
+            return
+        event.stop()
+        name = widget.row.name
+        if name.startswith("__"):
+            return
+        self.selected_name = name
+        # move highlight so the preview pane follows the right-clicked row
+        lv = self.query_one("#sessions", ListView)
+        try:
+            lv.index = lv.children.index(widget)
+        except ValueError:
+            pass
+        self._update_preview()
+        await self.run_action_with_modal(name)
+
+    async def run_action_with_modal(self, session_name: str) -> None:
+        from .tui_actions import SessionActionModal
+        modal = SessionActionModal(unquote_display(session_name))
+        await app_push_screen(self, modal, session_name)
+
+    async def _run_chosen_action(self, action: Optional[str], name: str) -> None:
+        if action == "connect":
+            self.selected_name = name
+            await self.action_connect()
+        elif action == "ping":
+            self.selected_name = name
+            await self.action_ping()
+        elif action == "copy":
+            self.selected_name = name
+            await self.action_copy()
+        elif action == "logs":
+            self.selected_name = name
+            await self.action_logs()
+        # None = cancelled: nothing to do
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self._update_preview()

@@ -426,7 +426,117 @@ class TestBrowserApp:
             await pilot.pause()
         assert called == ["solo"]
 
-    async def test_connect_via_callback(self):
+class TestSessionActionModal:
+    def _click_on_row(self, app, row_index):
+        """Craft a right-click event targeted at a session ListView row."""
+        from textual import events
+        lv = app.query_one("#sessions")
+        item = lv.children[row_index]
+        region = item.region
+        return events.Click(
+            widget=item,
+            x=region.x + 1, y=region.y + 1,
+            delta_x=0, delta_y=0,
+            button=3, shift=False, meta=False, ctrl=False,
+            screen_x=region.x + 1, screen_y=region.y + 1,
+            style=None,
+        )
+
+    async def test_right_click_opens_modal(self):
+        from utils.tui_actions import SessionActionModal
+        app = SessionBrowser(
+            {"solo": {"HostName": "h"}}, [], {}, None,
+            connect_callback=lambda n: None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(self._click_on_row(app, 0))
+            await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionModal)
+
+    async def test_modal_dismiss_connect(self):
+        from utils.tui_actions import SessionActionModal
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            results = []
+            await app.push_screen(
+                SessionActionModal("solo"), callback=lambda v: results.append(v))
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionModal)
+            await pilot.press("enter")
+            await pilot.pause()
+        assert results == ["connect"]
+
+    async def test_right_click_connect_full_flow(self):
+        """right-click -> modal -> Connect key runs the callback."""
+        called = []
+        app = SessionBrowser(
+            {"solo": {"HostName": "h"}}, [], {}, None,
+            connect_callback=lambda n: called.append(n))
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(self._click_on_row(app, 0))
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+        assert called == ["solo"], f"called={called}"
+        assert app.selected_name == "solo"
+
+    async def test_modal_buttons_press(self):
+        from utils.tui_actions import SessionActionModal
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            results = []
+            modal = SessionActionModal("solo")
+            await app.push_screen(modal, callback=lambda v: results.append(v))
+            await pilot.pause()
+            await pilot.click(modal.query_one("#ac-ping"))
+            await pilot.pause()
+        assert results == ["ping"]
+
+    async def test_modal_escape_cancels(self):
+        from utils.tui_actions import SessionActionModal
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            results = []
+            modal = SessionActionModal("solo")
+            await app.push_screen(modal, callback=lambda v: results.append(v))
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+        assert results == [None]
+
+    async def test_modal_ping_dispatch(self):
+        """right-click -> ping action dispatches to run_ping (status bar)."""
+        app = SessionBrowser(
+            {"solo": {"HostName": "192.0.2.1", "PortNumber": "1"}},
+            [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(self._click_on_row(app, 0))
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            await pilot.pause()
+        assert "✗" in app.status_message  # 192.0.2.1:1 refused
+
+    async def test_right_click_on_header_noop(self):
+        """Right-click over a disabled tag header does nothing."""
+        from utils.tui_actions import SessionActionModal
+        app = SessionBrowser(
+            {"prod:a": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            lv = app.query_one("#sessions")
+            header_idx = next(i for i, c in enumerate(lv.children)
+                              if c.row.name.startswith("__"))
+            app.post_message(self._click_on_row(app, header_idx))
+            await pilot.pause()
+            await pilot.pause()
+            assert not isinstance(app.screen, SessionActionModal)
         called = []
         app = SessionBrowser(
             {"solo": {"HostName": "h"}}, [], {}, None,

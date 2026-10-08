@@ -4,12 +4,12 @@ import socket
 import subprocess  # nosec
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, RichLog, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Static
 
 
 def run_ping(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -51,6 +51,76 @@ def _size_str(size: int) -> str:
     if size >= 1024:
         return f"{size // 1024}K"
     return f"{size}B"
+
+
+class SessionActionModal(ModalScreen[Optional[str]]):
+    """Right-click / Enter-? menu for one session.
+
+    Returns the chosen action string via dismiss() result:
+    'connect' | 'ping' | 'copy' | 'logs' | None (dismissed).
+    The browser resolves the action against its own state.
+    """
+
+    AUTO_FOCUS = "Button"  # modal must take focus from the background list
+
+    BINDINGS = [
+        ("enter", "choose_connect", "Connect"),
+        ("p", "choose_ping", "Ping"),
+        ("y", "choose_copy", "Copy"),
+        ("l", "choose_logs", "Logs"),
+        ("escape", "cancel", "Back"),
+    ]
+
+    def __init__(self, session_name: str) -> None:
+        super().__init__()
+        self.session_name = session_name
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Horizontal
+        yield Vertical(
+            Label(f"[b]{self.session_name}[/b]", id="modal-title"),
+            Label("", id="modal-spacer"),
+            Horizontal(
+                Button("Connect", id="ac-connect", variant="primary"),
+                Button("Ping", id="ac-ping"),
+                Button("Copy cmd", id="ac-copy"),
+                Button("View logs", id="ac-logs"),
+                Button("Cancel", id="ac-cancel", variant="error"),
+                id="modal-buttons",
+            ),
+            id="modal-root",
+        )
+
+    async def _choose(self, action: str) -> None:
+        self.dismiss(action)
+
+    def on_mount(self) -> None:
+        self.query_one("#ac-connect", Button).focus()
+
+    async def _on_button_pressed(self, event: Button.Pressed) -> None:
+        mapping = {
+            "ac-connect": "connect",
+            "ac-ping": "ping",
+            "ac-copy": "copy",
+            "ac-logs": "logs",
+            "ac-cancel": None,
+        }
+        await self._choose(mapping.get(event.button.id))
+
+    async def action_choose_connect(self) -> None:
+        await self._choose("connect")
+
+    async def action_choose_ping(self) -> None:
+        await self._choose("ping")
+
+    async def action_choose_copy(self) -> None:
+        await self._choose("copy")
+
+    async def action_choose_logs(self) -> None:
+        await self._choose("logs")
+
+    async def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class LogViewerScreen(Screen):
