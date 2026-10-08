@@ -17,9 +17,9 @@ jump-host proxies, and remote commands.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock   # exact pins (or requirements.txt for latest)
 cp .env.example .env      # then edit to your paths
-./putty.py
+./putty.py                # or: putty-cli (console script), or bin/putty-cli from anywhere
 ```
 
 ## Configuration

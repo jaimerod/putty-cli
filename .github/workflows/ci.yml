@@ -21,10 +21,10 @@ jobs:
       - name: Install system deps
         run: sudo apt-get update && sudo apt-get install -y putty-tools tmux
 
-      - name: Install python deps
+      - name: Install python deps (locked)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.lock -r requirements.txt
+          pip install -r requirements.lock
 
       - name: Run tests with coverage gate
         run: pytest --cov=utils --cov=putty --cov-report=term --cov-fail-under=90
