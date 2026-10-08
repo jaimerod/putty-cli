@@ -238,7 +238,19 @@ class SessionBrowser(App[int]):
                 item.disabled = True
             list_view.append(item)
         if self.filtered_rows:
-            list_view.index = 0
+            # Land on the first selectable row: index 0 may be a disabled
+            # header/separator, and ListView won't highlight past it.
+            first_selectable = next(
+                (i for i, r in enumerate(self.filtered_rows)
+                 if not r.name.startswith("__")),
+                None,
+            )
+            if first_selectable is None:
+                list_view.index = 0  # only headers visible (e.g. stale filter)
+            elif list_view.index is None or \
+                    not 0 <= list_view.index < len(self.filtered_rows) or \
+                    self.filtered_rows[list_view.index].name.startswith("__"):
+                list_view.index = first_selectable
         self._update_preview()
         self._update_status()
 
@@ -265,7 +277,7 @@ class SessionBrowser(App[int]):
             self.selected_name = event.item.row.name
             await self.action_connect()
 
-    def on_list_view_highlight(self, event: ListView.Highlighted) -> None:
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self._update_preview()
 
     def _update_preview(self) -> None:

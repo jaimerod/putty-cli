@@ -232,6 +232,55 @@ class TestBrowserApp:
             text = str(app.query_one("#preview").render())
             assert "ssh" in text or "select" in text
 
+    async def test_arrow_keys_update_preview(self):
+        """Regression: handler was misnamed (on_list_view_highlight),
+        so Highlighted events never updated the preview pane."""
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            lv = app.query_one("#sessions")
+            # first selectable row is prod:web-1 (port 2222 in preview)
+            lv.index = next(i for i, r in enumerate(app.filtered_rows)
+                            if r.name == "prod:web-1")
+            await pilot.pause()
+            before = str(app.query_one("#preview").render())
+            lv.index = next(i for i, r in enumerate(app.filtered_rows)
+                            if r.name == "solo")
+            await pilot.pause()
+            after = str(app.query_one("#preview").render())
+            assert before != after
+            assert "d.example.com" in after
+
+    async def test_mount_skips_to_first_selectable(self):
+        """If row 0 is a tag header, the preview must still show a
+        session (highlight lands on the first selectable row)."""
+        app = SessionBrowser(USABLE, [], {}, None)  # first row: PROD header
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            lv = app.query_one("#sessions")
+            row = app._current_row()
+            assert row is not None and not row.name.startswith("__")
+            preview = str(app.query_one("#preview").render())
+            assert "ssh" in preview  # a real session command, not placeholder
+
+    async def test_filter_hide_headers_then_clear(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            filt = app.query_one("#filter")
+            filt.value = "staging"
+            await pilot.pause()
+            names = [r.name for r in app.filtered_rows]
+            assert names == ["staging:web"]
+            preview = str(app.query_one("#preview").render())
+            assert "c.example.com" in preview
+            filt.value = ""
+            await pilot.pause()
+            # headers return, selection re-lands on a selectable row
+            assert any(r.name.startswith("__hdr__")
+                       for r in app.filtered_rows)
+            assert not app._current_row().name.startswith("__")
+
     async def test_quit_binding(self):
         app = SessionBrowser(USABLE, [], {}, None)
         async with app.run_test() as pilot:
