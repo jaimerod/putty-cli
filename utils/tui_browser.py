@@ -196,8 +196,8 @@ class SessionBrowser(App[int]):
         # (check_action disables it while any modal screen is on top)
         Binding("enter", "connect", "Connect", priority=True),
         Binding("p", "ping", "Ping"),
-        Binding("y", "copy", "Copy cmd"),
-        Binding("l", "logs", "This session's log"),
+        Binding("y", "copy", "Copy Command"),
+        Binding("l", "logs", "View Session Log"),
         Binding("escape", "blur_filter", "List"),
     ]
 
@@ -249,9 +249,9 @@ class SessionBrowser(App[int]):
                                  markup=True)
         yield Static("", id="status")
         yield FARKeyBar(
-            [("Enter", "connect"), ("2×Enter", "connect now"),
-             ("RMB", "menu"), ("/", "find"), ("p", "ping"), ("y", "copy"),
-             ("l", "log"), ("q", "quit")]
+            [("Enter", "Connect"), ("2×Enter", "Connect now"),
+             ("RMB", "Menu"), ("/", "Find"), ("p", "Ping"), ("y", "Copy"),
+             ("l", "Log"), ("q", "Quit")]
         )
 
     def on_mount(self) -> None:

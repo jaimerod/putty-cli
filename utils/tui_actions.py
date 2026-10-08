@@ -314,8 +314,8 @@ class LogViewerScreen(Screen):
                           max_lines=self.max_lines)
         yield Static("", id="log-status")
         yield FARKeyBar([
-            ("/", "search"), ("n", "next"), ("N", "prev"),
-            ("Esc", "back"),
+            ("/", "Search"), ("n", "Next"), ("N", "Prev"),
+            ("Esc", "Back"),
         ])
 
     def on_mount(self) -> None:
