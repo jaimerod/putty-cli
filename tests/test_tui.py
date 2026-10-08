@@ -1,4 +1,6 @@
 """Textual TUI tests via run_test() pilots (no real terminal needed)."""
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import pytest
 
 pytest.importorskip("textual")
 
+import putty
 from utils.tui_actions import run_ping
 from utils.tui_browser import SessionBrowser, build_rows, preview_text
 
@@ -91,14 +94,16 @@ class TestTuiActions:
 
 
 class TestTuiFallback:
-    def test_run_tui_browser_without_textual_returns_90(self, monkeypatch, tmp_path, capsys):
-        """--tui without textual -> note + exit code 90 (retry hint)."""
+    def test_tui_default_on(self):
+        """--tui is the default mode; --no-tui opts out."""
+        assert putty.build_parser().parse_args([]).tui is True
+        assert putty.build_parser().parse_args(["--no-tui"]).tui is False
+
+    def test_run_tui_browser_without_textual_falls_back(self, monkeypatch, tmp_path, capsys):
+        """--tui (default) without textual -> note on stderr, falls back
+        to the standard menu flow (picked session then cancelled here)."""
         # block the import inside run_tui_browser's try
         import builtins
-        import contextlib
-        import io
-
-        import putty as putty_mod
         real_import = builtins.__import__
 
         def fake_import(name, *a, **k):
@@ -109,11 +114,15 @@ class TestTuiFallback:
         monkeypatch.setattr(builtins, "__import__", fake_import)
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(putty, "pick_session_interactive",
+                            lambda *a, **k: None)  # cancel at menu
         err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            rc = putty_mod.main(["--tui"])
-        assert rc == 90
+        out = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            rc = putty.main([])
+        assert rc == 0
         assert "textual not installed" in err.getvalue()
+        assert "Selection cancelled" in out.getvalue()
 
     def test_run_tui_browser_with_textual_runs_app(self, monkeypatch, tmp_path):
         """--tui with textual available launches SessionBrowser, exit 0."""

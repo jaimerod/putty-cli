@@ -94,10 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
              "also automatic when tmux is not installed",
     )
     parser.add_argument(
-        "--tui", action="store_true",
-        help="use the Textual session browser (persistent UI with "
-             "filter + preview); requires 'pip install textual'; "
-             "falls back to the standard menu when missing",
+        "--tui", action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use the Textual session browser (default; persistent UI "
+             "with filter + preview); --no-tui for the simple-term-menu "
+             "picker. Falls back to the menu when textual is missing",
     )
     return parser
 
@@ -404,15 +405,16 @@ def run_tui_browser(
     no_record: bool = False,
     no_tmux: bool = False,
     dry_run: bool = False,
-) -> int:
-    """Run the Textual browser; falls back to the simple-term-menu flow
-    when textual isn't installed. Returns process exit code."""
+) -> Optional[int]:
+    """Run the Textual browser. Returns the process exit code, or None
+    when textual isn't installed (caller falls back to the menu)."""
     try:
         from utils.tui_browser import SessionBrowser
     except ImportError:
-        print("Note: textual not installed; use the standard menu or "
-              "pip install 'putty-cli[tui]'.", file=sys.stderr)
-        return 90  # distinct code: caller can retry without --tui
+        print("Note: textual not installed; using the standard menu "
+              "(pip install 'putty-cli[tui]' for the browser UI).",
+              file=sys.stderr)
+        return None
 
     recent_file = Path.home() / ".putty_recent_sessions"
     use_tmux: Optional[bool] = False if no_tmux else None
@@ -489,12 +491,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     recent_entries = load_recent_entries(recent_file)
 
     if args.tui:
-        return run_tui_browser(
+        tui_rc = run_tui_browser(
             usable, recent_sessions, recent_entries, reg_path,
             group_by_tag=not args.flat,
             no_record=args.no_record, no_tmux=args.no_tmux,
             dry_run=args.dry_run,
         )
+        if tui_rc is not None:
+            return tui_rc
+        # textual missing -> fall through to the standard menu flow
 
     reg_stamp = file_stamp(reg_path)
 

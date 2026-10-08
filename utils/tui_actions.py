@@ -27,7 +27,8 @@ def copy_command(text: str) -> bool:
     """Copy via tmux buffer (inside tmux) or OSC52 escape sequence."""
     if os.environ.get("TMUX"):
         try:
-            result = subprocess.run(
+            # fixed argv, 'tmux' from PATH; text goes via stdin buffer
+            result = subprocess.run(  # nosec B603, B607
                 ["tmux", "load-buffer", "-w", "-"],
                 input=text.encode(), capture_output=True, timeout=5)
             if result.returncode == 0:

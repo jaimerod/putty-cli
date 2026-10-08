@@ -45,7 +45,8 @@ Real environment variables take precedence over `.env`, and CLI flags top both.
 ## CLI usage
 
 ```
-putty-cli                      interactive menu (action menu per session)
+putty-cli                      Textual session browser (default UI)
+putty-cli --no-tui             modal menu picker (action menu per session)
 putty-cli --list               print usable session names (scriptable)
 putty-cli --connect NAME       connect directly, no menu
 putty-cli --connect NAME --dry-run     print the tmux/ssh argv and exit
@@ -57,12 +58,9 @@ putty-cli --flat               no tag grouping
 putty-cli --no-tmux            run ssh directly (no logging)
 putty-cli --no-record          don't touch the recents file
 putty-cli --reg FILE           use a specific .reg file
-putty-cli --tui                Textual session browser (persistent UI)
-```
+## Textual browser (default)
 
-## Textual browser (`--tui`)
-
-A persistent full-screen browser instead of the modal menus:
+`putty-cli` with no flags runs the Textual session browser:
 
 - filter box (`/` to focus, type to narrow, Enter connects the current)
 - session list with tag groups and recents metadata (`2h ago ✗`)
@@ -74,8 +72,10 @@ A persistent full-screen browser instead of the modal menus:
 - Copy uses the tmux buffer when inside tmux, else OSC52
 
 Requires the optional extra: `pip install 'putty-cli[tui]'` (or
-`pip install textual`). Without it, `--tui` prints a note and falls
-back to the standard menu (exit code 90 for scripts).
+`pip install textual`). Without it, the browser prints a note and the
+classic simple-term-menu picker takes over (`--no-tui` forces the
+classic picker; `--fzf` overrides both).
+```
 
 ## Interactive features
 

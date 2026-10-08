@@ -1285,7 +1285,7 @@ class TestInteractiveFlows:
         self._fake_menu(monkeypatch, [None])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
         assert rc == 0
         assert "cancelled" in out.getvalue()
 
@@ -1297,7 +1297,7 @@ class TestInteractiveFlows:
         self._fake_menu(monkeypatch, [6, None])
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
         assert rc == 0
 
     def test_action_back_returns_to_sessions(self, monkeypatch, tmp_path):
@@ -1308,7 +1308,7 @@ class TestInteractiveFlows:
         self._fake_menu(monkeypatch, [3, None, None])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
         assert rc == 0
         assert out.getvalue().count("Selection cancelled") == 1
 
@@ -1324,7 +1324,7 @@ class TestInteractiveFlows:
         self._fake_menu(monkeypatch, [3, 0])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
         assert rc == 0
         recent = tmp_path / ".putty_recent_sessions"
         assert recent.exists()
@@ -1337,7 +1337,7 @@ class TestInteractiveFlows:
         # pick prod-db, action=Ping (index 2)
         self._fake_menu(monkeypatch, [3, 2])
         with contextlib.redirect_stdout(io.StringIO()):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
         assert rc == 0
         assert calls and calls[0][0] == "web1.example.com"
 
@@ -1349,7 +1349,7 @@ class TestInteractiveFlows:
         self._fake_menu(monkeypatch, [3, 1])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
         assert rc == 0
         assert "Copied" in out.getvalue()
 
@@ -1681,7 +1681,7 @@ class TestRegReload:
         err = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(err):
-            rc = putty.main([])
+            rc = putty.main(["--no-tui"])
 
         assert rc == 0
         assert "second" not in seen_usable[0]     # first snapshot: before
