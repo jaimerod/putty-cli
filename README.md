@@ -57,7 +57,25 @@ putty-cli --flat               no tag grouping
 putty-cli --no-tmux            run ssh directly (no logging)
 putty-cli --no-record          don't touch the recents file
 putty-cli --reg FILE           use a specific .reg file
+putty-cli --tui                Textual session browser (persistent UI)
 ```
+
+## Textual browser (`--tui`)
+
+A persistent full-screen browser instead of the modal menus:
+
+- filter box (`/` to focus, type to narrow, Enter connects the current)
+- session list with tag groups and recents metadata (`2h ago ✗`)
+- **live preview pane**: the ssh command for the highlighted session,
+  built without side effects (no puttygen run, no logs written)
+- keys: Enter connect · p ping · y copy command · l logs · q quit
+- connect suspends the UI and hands the terminal to tmux; the browser
+  redraws when the session ends
+- Copy uses the tmux buffer when inside tmux, else OSC52
+
+Requires the optional extra: `pip install 'putty-cli[tui]'` (or
+`pip install textual`). Without it, `--tui` prints a note and falls
+back to the standard menu (exit code 90 for scripts).
 
 ## Interactive features
 

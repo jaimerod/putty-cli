@@ -8,6 +8,7 @@ import pytest
 
 pytest.importorskip("textual")
 
+from utils.tui_actions import run_ping
 from utils.tui_browser import SessionBrowser, build_rows, preview_text
 
 USABLE = {
@@ -17,6 +18,130 @@ USABLE = {
     "staging:web": {"HostName": "c.example.com"},
     "solo": {"HostName": "d.example.com"},
 }
+
+
+class TestTuiActions:
+    def test_run_ping_reachable(self):
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        ok, msg = run_ping("127.0.0.1", str(port))
+        srv.close()
+        assert ok and "reachable" in msg
+
+    def test_run_ping_unreachable(self):
+        ok, msg = run_ping("192.0.2.1", "1")
+        assert not ok and "unreachable" in msg
+
+    def test_copy_via_tmux_buffer(self, monkeypatch):
+        import subprocess as sp
+        calls = []
+        monkeypatch.setenv("TMUX", "/tmp/tmux,0,0")
+        monkeypatch.setattr(
+            sp, "run",
+            lambda argv, **k: calls.append(argv) or sp.CompletedProcess(argv, 0))
+        from utils.tui_actions import copy_command
+        assert copy_command("ssh x")
+        assert calls[0][:3] == ["tmux", "load-buffer", "-w"]
+
+    def test_copy_via_tmux_falls_back_to_osc52(self, monkeypatch, capsys):
+        import subprocess as sp
+        monkeypatch.setenv("TMUX", "/tmp/tmux,0,0")
+        monkeypatch.setattr(
+            sp, "run",
+            lambda argv, **k: sp.CompletedProcess(argv, 1))
+        from utils.tui_actions import copy_command
+        assert copy_command("ssh x")
+        assert "\033]52;c;" in capsys.readouterr().out
+
+    def test_copy_osc52_without_tmux(self, monkeypatch, capsys):
+        monkeypatch.delenv("TMUX", raising=False)
+        from utils.tui_actions import copy_command
+        assert copy_command("ssh x")
+        assert "\033]52;c;" in capsys.readouterr().out
+
+    def test_logs_screen_lists_logs(self, tmp_path):
+        from utils.tui_actions import LogsScreen
+        (tmp_path / "2026-01-01_1200-host.log").write_text("hello")
+        text = LogsScreen(tmp_path)._list_text()
+        assert "host.log" in text
+        assert "session logs in" in text
+
+    def test_logs_screen_empty(self, tmp_path):
+        from utils.tui_actions import LogsScreen
+        text = LogsScreen(tmp_path)._list_text()
+        assert "No session logs" in text
+
+    def test_logs_screen_push_and_dismiss(self):
+        from utils.tui_actions import LogsScreen
+
+        async def go():
+            app = SessionBrowser(USABLE, [], {}, None)
+            async with app.run_test(size=(100, 30)) as pilot:
+                await pilot.pause()
+                await app.push_screen(LogsScreen(Path("/tmp")))
+                await pilot.pause()
+                await pilot.press("escape")
+                await pilot.pause()
+
+        import asyncio
+        asyncio.run(go())
+
+
+class TestTuiFallback:
+    def test_run_tui_browser_without_textual_returns_90(self, monkeypatch, tmp_path, capsys):
+        """--tui without textual -> note + exit code 90 (retry hint)."""
+        # block the import inside run_tui_browser's try
+        import builtins
+        import contextlib
+        import io
+
+        import putty as putty_mod
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **k):
+            if name == "utils.tui_browser":
+                raise ImportError(name)
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = putty_mod.main(["--tui"])
+        assert rc == 90
+        assert "textual not installed" in err.getvalue()
+
+    def test_run_tui_browser_with_textual_runs_app(self, monkeypatch, tmp_path):
+        """--tui with textual available launches SessionBrowser, exit 0."""
+        import contextlib
+        import io
+
+        import putty as putty_mod
+
+        launched = {}
+
+        class FakeBrowser:
+            def __init__(self, *a, **k):
+                launched["args"] = a
+                launched["kwargs"] = k
+
+            def run(self):
+                launched["ran"] = True
+
+        import utils.tui_browser as tb
+        monkeypatch.setattr(tb, "SessionBrowser", FakeBrowser)
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = putty_mod.main(["--tui"])
+        assert rc == 0
+        assert launched.get("ran") is True
+        # callback wired for connect
+        assert callable(launched["kwargs"].get("connect_callback"))
 
 
 class TestBuildRows:
