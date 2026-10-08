@@ -76,8 +76,12 @@ def generate_menu_items(
                 _, display, session_name = make_display_pair(name, sessions[name])
                 if recent_entries and name in recent_entries:
                     entry = recent_entries[name]
-                    info = format_relative_time(entry.get("ts"))
-                    if int(entry.get("exit") or 0) not in (0, None):
+                    ts = entry.get("ts")
+                    info = format_relative_time(
+                        int(ts) if isinstance(ts, (int, float)) else None
+                    )
+                    exit_code = entry.get("exit")
+                    if isinstance(exit_code, (int, float)) and int(exit_code) != 0:
                         info += (" " if info else "") + "✗"
                     if info:
                         display = f"{display}  ({info})"

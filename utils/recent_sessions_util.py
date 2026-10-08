@@ -90,12 +90,11 @@ def update_recent_sessions(
     prev_names: List[str] = []
     try:
         if recent_file.exists():
+            parsed = (_parse_line(raw) for raw in
+                      recent_file.read_text(encoding="utf-8").splitlines())
             prev_names = [
-                n for n in (
-                    _parse_line(raw)["name"] if _parse_line(raw) else None
-                    for raw in recent_file.read_text(encoding="utf-8").splitlines()
-                )
-                if n is not None and n != selected_name
+                str(p["name"]) for p in parsed
+                if p is not None and str(p["name"]) != selected_name
             ]
     except Exception:  # nosec - recents read is best-effort
         prev_names = []

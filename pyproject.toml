@@ -37,10 +37,13 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
+[[tool.mypy.overrides]]
+module = "simple_term_menu.*"
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
