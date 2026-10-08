@@ -91,7 +91,7 @@ class SessionActionModal(ModalScreen[Optional[str]]):
             id="modal-root",
         )
 
-    async def _choose(self, action: str) -> None:
+    async def _choose(self, action: Optional[str]) -> None:
         self.dismiss(action)
 
     def on_mount(self) -> None:
@@ -105,7 +105,9 @@ class SessionActionModal(ModalScreen[Optional[str]]):
             "ac-logs": "logs",
             "ac-cancel": None,
         }
-        await self._choose(mapping.get(event.button.id))
+        button_id = event.button.id or ""
+        action = mapping.get(button_id)
+        await self._choose(action)
 
     async def action_choose_connect(self) -> None:
         await self._choose("connect")

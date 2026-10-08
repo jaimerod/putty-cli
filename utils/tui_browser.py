@@ -129,11 +129,16 @@ def preview_text(
 
 
 class _SessionItem(ListItem):
-    """ListItem bound to its SessionRow (Textual 8 dropped ListItem.data)."""
+    """ListItem bound to its SessionRow (Textual 8 dropped ListItem.data).
 
-    def __init__(self, row: SessionRow, *widgets: Any) -> None:
+    Click grammar is handled by SessionBrowser.on_click; ListView.Selected
+    (mouse) is treated as select-only there."""
+
+    def __init__(self, row: SessionRow, browser: "SessionBrowser",
+                 *widgets: Any) -> None:
         super().__init__(*widgets)
         self.row = row
+        self.browser = browser
 
 
 async def app_push_screen(
@@ -145,7 +150,7 @@ async def app_push_screen(
     def on_result(action: Optional[str]) -> None:
         app.call_later(app._run_chosen_action, action, session_name)
 
-    app.push_screen(modal, callback=on_result)  # type: ignore[arg-type]
+    app.push_screen(modal, callback=on_result)
 
 
 class SessionBrowser(App[int]):
@@ -163,7 +168,10 @@ class SessionBrowser(App[int]):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("slash", "focus_filter", "Find"),
-        Binding("enter", "connect", "Connect"),
+        # priority: must pre-empt the focused ListView's own Enter
+        # (select_cursor), else a second 'Selected' fires and double-fires
+        # (check_action disables it while any modal screen is on top)
+        Binding("enter", "connect", "Connect", priority=True),
         Binding("p", "ping", "Ping"),
         Binding("y", "copy", "Copy cmd"),
         Binding("l", "logs", "This session's log"),
@@ -245,7 +253,7 @@ class SessionBrowser(App[int]):
         list_view.clear()
         for row in self.filtered_rows:
             selectable = not row.name.startswith("__")
-            item = _SessionItem(row, Static(row.display, markup=False))
+            item = _SessionItem(row, self, Static(row.display, markup=False))
             if not selectable:
                 item.add_class("header")
                 item.disabled = True
@@ -286,33 +294,50 @@ class SessionBrowser(App[int]):
     async def on_list_view_selected(
         self, event: "ListView.Selected"
     ) -> None:
+        """Selected from ListView = mouse single-click (Enter is captured
+        by the app-level priority binding): treat as select-only."""
         if isinstance(event.item, _SessionItem):
-            self.selected_name = event.item.row.name
-            await self.action_connect()
+            self.select_session_item(event.item)
+
+    def select_session_item(self, item: "_SessionItem") -> None:
+        """Single left click: highlight the row (preview follows)."""
+        lv = self.query_one("#sessions", ListView)
+        try:
+            lv.index = lv.children.index(item)
+        except ValueError:
+            pass
+        self._update_preview()
 
     async def on_click(self, event: "events.Click") -> None:
-        """Right-click (button 3) on a session row opens the action modal."""
-        if event.button != 3:
-            return
+        """Click grammar on a session row: single select, double connect,
+        right-click opens the action modal."""
         # find the session row under the cursor (walk up the widget tree)
-        widget = event.widget
+        widget: Any = event.widget
         while widget is not None and not isinstance(widget, _SessionItem):
             widget = widget.parent
         if widget is None or not isinstance(widget, _SessionItem):
             return
-        event.stop()
         name = widget.row.name
         if name.startswith("__"):
             return
-        self.selected_name = name
-        # move highlight so the preview pane follows the right-clicked row
-        lv = self.query_one("#sessions", ListView)
-        try:
-            lv.index = lv.children.index(widget)
-        except ValueError:
-            pass
-        self._update_preview()
-        await self.run_action_with_modal(name)
+        if event.button == 1:
+            self.select_session_item(widget)
+            if event.chain == 2:
+                # double click: connect
+                self.selected_name = name
+                await self.action_connect()
+            # single click: select only
+            return
+        if event.button == 3:
+            event.stop()
+            self.selected_name = name
+            try:
+                lv = self.query_one("#sessions", ListView)
+                lv.index = lv.children.index(widget)
+            except ValueError:
+                pass
+            self._update_preview()
+            await self.run_action_with_modal(name)
 
     async def run_action_with_modal(self, session_name: str) -> None:
         from .tui_actions import SessionActionModal
@@ -344,6 +369,14 @@ class SessionBrowser(App[int]):
             preview.update("select a session")
             return
         preview.update(preview_text(self.usable[row.name], self.reg_path))
+
+    def check_action(self, action: str, parameters: tuple) -> bool:
+        """Disable the priority Enter binding while a modal/log screen is
+        active so the modal's own widgets and keys keep working."""
+        if action == "connect":
+            from .tui_actions import LogViewerScreen, SessionActionModal
+            return type(self.screen) not in (SessionActionModal, LogViewerScreen)
+        return True
 
     async def action_quit(self) -> None:
         self.selected_name = None
