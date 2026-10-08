@@ -65,34 +65,48 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
     DEFAULT_CSS = """
     SessionActionMenu { background: transparent; }
 
+    /* the box: fits its content exactly, no stretching */
     #ctx-menu {
-        background: $surface;
-        border: round $accent;
-        width: auto;
+        layout: vertical;
+        background: #000000E0;
+        border: round #666666;
+        width: auto;   /* sized to the widest child */
         height: auto;
-        padding: 0 1;
+        padding: 0;
         layer: top;
     }
 
-    #ctx-menu .ctx-item {
-        padding: 0 2;
-        width: 1fr;
-        height: 1;
-        color: $text;
+    /* children must not claim free space */
+    #ctx-menu VerticalScroll {
+        width: auto;
+        height: auto;
+        max-height: 16;
     }
 
-    #ctx-menu .ctx-item.-highlight {
-        background: $accent;
-        color: $text;
-        text-style: bold;
-    }
-
+    /* title row */
     #ctx-title {
-        color: $accent;
-        text-style: bold;
-        padding: 0 1;
+        color: #888888;
+        text-style: none;
+        padding: 0 2;
         height: 1;
-        width: 1fr;
+        width: auto;
+    }
+
+    /* every option: grey text on black, single row, content width;
+       border spacing on the parent aligns rows to the longest label */
+    .ctx-option {
+        background: #000000;
+        color: #aaaaaa;
+        padding: 0 2;
+        height: 1;
+        width: auto;
+    }
+
+    /* selected option: reversed */
+    .ctx-option.-selected {
+        background: #aaaaaa;
+        color: #000000;
+        text-style: bold;
     }
     """
 
@@ -113,85 +127,84 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         self.cursor = cursor
         self._index = 0
 
-    def compose(self) -> ComposeResult:
-        from textual.containers import Vertical
-        items = "\n".join(f"[class ctx-item]{label}" for label, _ in self.ITEMS)
-        yield Vertical(
-            Label(self.session_name, id="ctx-title"),
-            Static(items, id="ctx-items", markup=True),
-            id="ctx-menu",
+    def _build_option(self, label: str) -> Static:
+        # pad all rows to the longest label so the highlight bar spans
+        # the full menu width evenly
+        longest = max(len(item_label) for item_label, _ in self.ITEMS)
+        return Static(
+            label + " " * (longest - len(label)),
+            classes="ctx-option", markup=False,
         )
 
-    def on_mount(self) -> None:
-        menu = self.query_one("#ctx-menu")
-        # position: at the cursor, clamped so the box stays on screen
-        size = self.size
-        width = 24
-        height = len(self.ITEMS) + 2  # items + title + border allowance
-        x = min(self.cursor[0], max(0, size.width - width - 1))
-        y = min(self.cursor[1], max(0, size.height - height - 1))
-        menu.styles.offset = (x, y)
-        self._highlight(0)
-        self._refresh_highlighted()
+    def compose(self) -> ComposeResult:
+        from textual.containers import VerticalScroll
+        with Vertical(id="ctx-menu"):
+            yield Label(self.session_name, id="ctx-title")
+            with VerticalScroll(id="ctx-items"):
+                for label, _action in self.ITEMS:
+                    yield self._build_option(label)
 
-    def _refresh_highlighted(self) -> None:
-        """Textual does not style sub-labels selectively; we rewrite the
-        items text so only the active one carries the -highlight class."""
-        lines = []
-        for i, (label, _action) in enumerate(self.ITEMS):
+    def on_mount(self) -> None:
+        menu = self.query_one("#ctx-menu", Vertical)
+        # box fits its longest option; keep it on screen
+        box_w = max(len(label) for label, _ in self.ITEMS) + 4  # padding+border
+        box_h = len(self.ITEMS) + 1  # + title row
+        size = self.size
+        x = min(self.cursor[0] - 1, max(0, size.width - box_w - 1))
+        y = min(self.cursor[1], max(0, size.height - box_h - 2))
+        menu.styles.offset = (x, y)
+        self._render_items()
+
+    def _render_items(self) -> None:
+        """(Re)apply the -selected class on exactly one option row."""
+        options = list(self.query(".ctx-option"))
+        for i, opt in enumerate(options):
             if i == self._index:
-                lines.append(f"[reverse][bold] {label:<20}[/]")
+                opt.add_class("-selected")
             else:
-                lines.append(f" {label:<20}")
-        self.query_one("#ctx-items", Static).update("\n".join(lines))
+                opt.remove_class("-selected")
 
     def _highlight(self, index: int) -> None:
         self._index = max(0, min(index, len(self.ITEMS) - 1))
-        self._refresh_highlighted()
+        self._render_items()
 
-    def on_key(self, event: "events.Key") -> None:
+    def on_key(self, event: events.Key) -> None:
         if event.key == "down":
             self._highlight(self._index + 1)
             event.stop()
+            event.prevent_default()
         elif event.key == "up":
             self._highlight(self._index - 1)
             event.stop()
+            event.prevent_default()
         elif event.key == "enter":
             self.dismiss(self.ITEMS[self._index][1])
             event.stop()
+            event.prevent_default()
 
-    def on_click(self, event: "events.Click") -> None:
-        """Click on an item executes it; any click outside the box closes."""
-        menu = self.query_one("#ctx-menu", Vertical)
-        widget: Any = event.widget
+    def on_click(self, event: events.Click) -> None:
+        """Option click executes; click anywhere outside the box closes."""
+        menu = self.query_one("#ctx-menu")
         inside = False
+        widget: Any = event.widget
         while widget is not None:
             if widget is menu:
                 inside = True
                 break
             widget = widget.parent
-        if inside:
-            # find which item the click landed on: row offset inside box
-            row = event.widget
-            if isinstance(row, Static) and row.id == "ctx-items":
-                # approximate: click y relative to items start
-                idx = self._index  # fallback: current
-                for i, label_pos in self._item_spans(event):
-                    if label_pos is not None and label_pos == i:
-                        idx = i
-                        break
-                self.dismiss(self.ITEMS[idx][1])
-            event.stop()
-        else:
+        if not inside:
             self.dismiss(None)
-
-    def _item_spans(self, event: "events.Click") -> list:
-        # The items widget position vs click: compute which line of the
-        # items Static was clicked.
-        items = self.query_one("#ctx-items", Static)
-        region = items.region
-        rel_y = event.screen_y - region.y
-        return [(i, i if i == rel_y else None) for i in range(len(self.ITEMS))]
+            event.stop()
+            return
+        # click on an option row: execute it
+        while widget is not None and not (
+            isinstance(widget, Static) and "ctx-option" in widget.classes
+        ):
+            widget = widget.parent
+        if isinstance(widget, Static):
+            idx = list(self.query(".ctx-option")).index(widget)
+            self.dismiss(self.ITEMS[idx][1])
+            event.stop()
 
     async def action_cancel(self) -> None:
         self.dismiss(None)
