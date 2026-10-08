@@ -1,4 +1,6 @@
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from collections.abc import Iterator
+from typing import Any, Dict, Optional, Tuple
+
 from .recent_sessions_util import format_relative_time
 from .titlecase_util import smart_title, unquote_display
 
@@ -19,8 +21,12 @@ def make_display_pair(name: str, session: Dict[str, Any]) -> Tuple[str, str, str
     host = unquote_display(session.get("HostName", "???"))
     user = unquote_display(session.get("UserName", ""))
     port = session.get("PortNumber", "22")
-    keyhint = " 🔑" if "PublicKeyFile" in session and session["PublicKeyFile"].strip() else ""
-    proxyhint = " 🔀" if session.get("ProxyMethod", "0").strip() == "6" and session.get("ProxyHost", "").strip() else ""
+    keyhint = (
+        " 🔑" if "PublicKeyFile" in session
+        and session["PublicKeyFile"].strip() else "")
+    proxyhint = (
+        " 🔀" if session.get("ProxyMethod", "0").strip() == "6"
+        and session.get("ProxyHost", "").strip() else "")
     cmdhint = " ⚡" if session.get("RemoteCommand", "").strip() else ""
     target = f"{user}@" if user else ""
     target += host

@@ -1,11 +1,9 @@
 import os
-import subprocess
+import subprocess  # nosec
 import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
-
-from .ssh_command_util import safe_name
 
 VIEWER_KEYS = {"n": "-N", "v": "-V"}
 
@@ -65,7 +63,11 @@ def pick_and_view_log(directory: Optional[Path] = None) -> Optional[int]:
     path, _, _ = logs[idx]
     pager = os.environ.get("PAGER", "less")
     try:
-        result = subprocess.run([pager, str(path)])
+        # user-configured $PAGER on our own log path, by design
+        # user-configured $PAGER on our own log path, by design
+        result = subprocess.run([pager, str(path)])  # nosec B603, B607
+  # nosec B603, B607
+
         return result.returncode
     except FileNotFoundError:
         # No pager installed: dump to stdout as fallback

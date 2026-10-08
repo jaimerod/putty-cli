@@ -9,7 +9,7 @@ import argparse
 import os
 import shlex
 import shutil
-import subprocess
+import subprocess  # nosec
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,9 +17,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from utils.display_util import generate_menu_items
 from utils.env_util import load_dotenv
 from utils.putty_parse_util import parse_putty_reg
-from utils.recent_sessions_util import (load_recent_entries,
-                                        load_recent_sessions,
-                                        update_recent_sessions)
+from utils.recent_sessions_util import (
+    load_recent_entries,
+    load_recent_sessions,
+    update_recent_sessions,
+)
 from utils.ssh_command_util import build_ssh_command
 from utils.titlecase_util import unquote_display
 
@@ -180,7 +182,8 @@ def connect_to_session(
         return 0
 
     try:
-        result = subprocess.run(cmd, check=False)
+        # argv built internally by shlex.quote; no user shell text
+        result = subprocess.run(cmd, check=False)  # nosec B603
         exit_code = result.returncode
         # Phase 2: attach to the (already logged, already started) session.
         # The launch was detached so pipe-pane was running before attach -
@@ -233,7 +236,8 @@ def pick_session_fzf(
         f"--connect {{}} --dry-run 2>/dev/null | head -40"
     )
     try:
-        result = subprocess.run(
+        # fixed args; session names only in stdin, never in argv
+        result = subprocess.run(  # nosec B607, B603
             ["fzf", "--height=40%", "--reverse",
              "--preview", preview_cmd, "--preview-window", "right:60%:wrap"],
             input="\n".join(names), text=True, capture_output=True,
@@ -323,7 +327,8 @@ def attach_tmux_session(launch_argv: List[str]) -> int:
         # Outside tmux: attach to the (self-destroying) session.
         argv = ["tmux", "attach-session", "-t", name]
     try:
-        result = subprocess.run(argv, check=False)
+        # argv from our own builder; 'tmux' partial path is conventional
+        result = subprocess.run(argv, check=False)  # nosec B603, B607
         return result.returncode
     except FileNotFoundError:
         return 0

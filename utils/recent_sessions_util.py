@@ -1,7 +1,7 @@
-from pathlib import Path
-from typing import Dict, List, Optional
 import os
 import time
+from pathlib import Path
+from typing import Dict, List, Optional
 
 MAX_ENTRIES = 20
 MAX_SHOW = 5
@@ -92,12 +92,12 @@ def update_recent_sessions(
         if recent_file.exists():
             prev_names = [
                 n for n in (
-                    _parse_line(l)["name"] if _parse_line(l) else None
-                    for l in recent_file.read_text(encoding="utf-8").splitlines()
+                    _parse_line(raw)["name"] if _parse_line(raw) else None
+                    for raw in recent_file.read_text(encoding="utf-8").splitlines()
                 )
                 if n is not None and n != selected_name
             ]
-    except Exception:
+    except Exception:  # nosec - recents read is best-effort
         prev_names = []
 
     entry: Dict[str, object] = {
@@ -117,7 +117,7 @@ def update_recent_sessions(
             f.write(text)
         os.replace(tmp_path, recent_file)
         tmp_path = None
-    except Exception:
+    except Exception:  # nosec - best-effort write, never fatal
         pass
     finally:
         if tmp_path and os.path.exists(tmp_path):

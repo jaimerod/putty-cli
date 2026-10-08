@@ -12,12 +12,13 @@ import pytest
 
 import putty
 from utils.display_util import generate_menu_items, make_display_pair, separator
-from utils.env_util import load_dotenv
 from utils.ppk_convert_util import convert_ppk_to_openssh
 from utils.putty_parse_util import parse_putty_reg
-from utils.recent_sessions_util import (load_recent_entries,
-                                        load_recent_sessions,
-                                        update_recent_sessions)
+from utils.recent_sessions_util import (
+    load_recent_entries,
+    load_recent_sessions,
+    update_recent_sessions,
+)
 from utils.ssh_command_util import build_ssh_command, safe_name
 from utils.titlecase_util import smart_title, unquote_display
 
@@ -103,8 +104,9 @@ class TestParsePuttyReg:
             sessions["with-key"]["PublicKeyFile"]
 
     def test_missing_file_raises(self, tmp_path):
-        with pytest.raises(Exception):
-            parse_putty_reg(tmp_path / "nope.reg")
+        from utils.putty_parse_util import parse_putty_reg as ppr
+        with pytest.raises(FileNotFoundError):
+            ppr(tmp_path / "nope.reg")
 
     def test_garbage_file_no_sessions(self, tmp_path):
         p = tmp_path / "garbage.reg"
@@ -330,8 +332,9 @@ class TestDotenv:
         assert os.environ["PUTTY_TEST_VAR"] == "from_env"
 
     def test_loads_from_file(self, monkeypatch, tmp_path):
-        from utils import env_util
         import os
+
+        from utils import env_util
         f = tmp_path / ".env"
         f.write_text("PUTTY_TEST_VAR2=from_file\n", encoding="utf-8")
         monkeypatch.delenv("PUTTY_TEST_VAR2", raising=False)
@@ -401,8 +404,8 @@ class TestRecentsEdgeCases:
 
 class TestCli:
     def _run(self, *args, env_reg="tests/data/sample.reg", expect_stdout=None, expect_stderr=None):
-        import io
         import contextlib
+        import io
         import os
         old = os.environ.get("PUTTY_REG_PATH")
         if env_reg:
@@ -446,9 +449,8 @@ class TestCli:
         assert rc == 1
 
     def test_connect_dry_run_does_not_record(self, tmp_path, monkeypatch):
-        import io
         import contextlib
-        import os
+        import io
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
         recent = tmp_path / "recent.txt"
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -458,8 +460,8 @@ class TestCli:
         assert not recent.exists()
 
     def test_no_reg_path_exits_cleanly(self, monkeypatch):
-        import io
         import contextlib
+        import io
         monkeypatch.delenv("PUTTY_REG_PATH", raising=False)
         monkeypatch.setattr("utils.env_util._find_env_file", lambda: None)
         out, err = io.StringIO(), io.StringIO()
@@ -551,6 +553,7 @@ class TestSessionActions:
     def test_fzf_esc_returns_none(self, monkeypatch, tmp_path):
         """fzf nonzero exit (Esc) -> None."""
         import subprocess as sp
+
         from putty import pick_session_fzf
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/fzf")
         monkeypatch.setattr(
@@ -562,6 +565,7 @@ class TestSessionActions:
 
     def test_fzf_picks_valid_session(self, monkeypatch, tmp_path):
         import subprocess as sp
+
         from putty import pick_session_fzf
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/fzf")
         monkeypatch.setattr(
@@ -573,6 +577,7 @@ class TestSessionActions:
 
     def test_fzf_filters_invalid_output(self, monkeypatch, tmp_path):
         import subprocess as sp
+
         from putty import pick_session_fzf
         monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/fzf")
         monkeypatch.setattr(
@@ -856,7 +861,7 @@ class TestMoshAndExtraArgs:
         rc = attach_tmux_session(
             ["tmux", "new-session", "-d", "-n", "s", "ssh h", ";", "pipe-pane"])
         assert rc == 0
-        launches[-1][:3] == ["tmux", "attach-session", "-t"]
+        assert launches[-1][:3] == ["tmux", "attach-session", "-t"]
 
     def test_attach_tmux_session_inside(self, monkeypatch, tmp_path):
         import subprocess as sp
@@ -986,8 +991,7 @@ class TestPpkConvert:
     def test_cached_key_feeds_build_ssh_command(self, monkeypatch, tmp_path):
         """Regression: a warm cache + build_ssh_command must not raise
         TypeError from shlex.quote(PosixPath)."""
-        from utils import ssh_command_util as scu
-        cache = self._scratch_cache(monkeypatch, tmp_path)
+        self._scratch_cache(monkeypatch, tmp_path)
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         keys_dir = tmp_path / "keys"
         keys_dir.mkdir()
@@ -1003,7 +1007,7 @@ class TestPpkConvert:
         assert shlex.quote(key2) in " ".join(a for a in ssh_tokens(argv2))
 
     def test_cache_invalidated_on_mtime_change(self, monkeypatch, tmp_path):
-        cache = self._scratch_cache(monkeypatch, tmp_path)
+        self._scratch_cache(monkeypatch, tmp_path)
         import os
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
@@ -1032,7 +1036,7 @@ class TestPpkConvert:
         assert convert_ppk_to_openssh(str(bad)) is None
 
     def test_key_permissions_0600(self, monkeypatch, tmp_path):
-        cache = self._scratch_cache(monkeypatch, tmp_path)
+        self._scratch_cache(monkeypatch, tmp_path)
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".ppk", delete=False) as f:
             f.write(Path(PPK_FIXTURE).read_bytes())
@@ -1046,7 +1050,6 @@ class TestPpkConvert:
         cache = tmp_path / "ppkcache"
         monkeypatch.setenv("PUTTY_PPK_CACHE_DIR", str(cache))
         # Simulate unwritable cache: mkdir raises
-        import shutil as sh
         real_mkdir = Path.mkdir
         def fake_mkdir(self, *a, **k):
             if str(self) == str(cache):
@@ -1189,7 +1192,6 @@ class TestPpkPathResolution:
 
     def test_log_dir_falls_back_to_home(self, monkeypatch, tmp_path):
         """No env var and no reg_path -> ~/.putty-cli/logs."""
-        from utils import ssh_command_util as scu
         monkeypatch.delenv("PUTTY_LOG_DIR", raising=False)
         argv, _ = build_ssh_command("s", {"HostName": "h"}, reg_path=None)
         assert str(Path.home() / ".putty-cli" / "logs") in " ".join(argv)
@@ -1199,8 +1201,9 @@ class TestPpkPathResolution:
 
 class TestRecentsMetadata:
     def test_format_relative_time(self, monkeypatch):
-        from utils.recent_sessions_util import format_relative_time
         import time as t
+
+        from utils.recent_sessions_util import format_relative_time
         now = int(t.time())
         monkeypatch.setattr(t, "time", lambda: now)
         assert format_relative_time(None) == ""

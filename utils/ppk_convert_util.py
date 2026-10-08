@@ -1,6 +1,6 @@
 import hashlib
 import os
-import subprocess
+import subprocess  # nosec
 import sys
 import tempfile
 from pathlib import Path
@@ -33,7 +33,8 @@ def convert_ppk_to_openssh(ppk_path: str) -> Optional[str]:
         fd, tmp_path = tempfile.mkstemp(suffix=".key")
         os.close(fd)
 
-        result = subprocess.run(
+        # fixed args: binary + our temp paths; no untrusted input
+        result = subprocess.run(  # nosec B603, B607
             [PUTTYGEN_CMD, str(ppk_file), "-O", "private-openssh", "-o", tmp_path],
             capture_output=True,
             text=True,
@@ -41,7 +42,8 @@ def convert_ppk_to_openssh(ppk_path: str) -> Optional[str]:
         )
 
         if result.returncode != 0:
-            print("puttygen failed:", result.stderr.strip() or result.stdout.strip(), file=sys.stderr)
+            msg = result.stderr.strip() or result.stdout.strip()
+            print("puttygen failed:", msg, file=sys.stderr)
             os.unlink(tmp_path)
             return None
 
