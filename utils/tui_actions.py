@@ -3,16 +3,13 @@ import os
 import socket
 import subprocess  # nosec
 import sys
-import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, ListItem, ListView, RichLog, Static
-
-from .logs_util import list_logs
+from textual.widgets import Footer, Header, Input, RichLog, Static
 
 
 def run_ping(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -185,69 +182,6 @@ class LogViewerScreen(Screen):
             else f"  {i + 1} {self.lines[i]}"
             for i in range(start, end)
         ]
-
-    async def action_dismiss(self, result: object = None) -> None:
-        self.app.pop_screen()
-
-
-class _LogItem(ListItem):
-    """ListItem bound to a log path (Textual 8 dropped ListItem.data)."""
-
-    def __init__(self, path: Path, label: str) -> None:
-        super().__init__(Static(label, markup=False))
-        self.log_path = path
-
-
-class LogsScreen(Screen):
-    """In-app log chooser: one session's logs (newest first) or all logs."""
-
-    BINDINGS = [
-        ("escape", "dismiss", "Back"),
-        ("q", "dismiss", "Back"),
-        ("enter", "view", "View"),
-    ]
-
-    def __init__(self, logs_dir: Path, session_name: Optional[str] = None) -> None:
-        super().__init__()
-        self.logs_dir = logs_dir
-        self.session_name = session_name
-        self.logs: List[Tuple[Path, int, float]] = []
-
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Input(placeholder="filter logs…", id="logfilter")
-        yield ListView(id="logfiles")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self._refresh()
-        self.query_one("#logfiles", ListView).focus()
-
-    def _refresh(self) -> None:
-        self.logs = list_logs(self.logs_dir, limit=200,
-                              session_name=self.session_name)
-        view = self.query_one("#logfiles", ListView)
-        term = self.query_one("#logfilter", Input).value.lower().strip()
-        view.clear()
-        shown = 0
-        for path, size, mtime in self.logs:
-            age = time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
-            label = f"{path.name:<60} {age}  {_size_str(size):>6}"
-            if term and term not in path.name.lower():
-                continue
-            shown += 1
-            view.append(_LogItem(path, label))
-        self.sub_title = (f"{shown} logs"
-                          + (f" for {self.session_name}" if self.session_name else "")
-                          or "logs")
-
-    async def action_view(self) -> None:
-        lv = self.query_one("#logfiles", ListView)
-        if lv.index is None or not 0 <= lv.index < len(lv.children):
-            return
-        item = lv.children[lv.index]
-        if isinstance(item, _LogItem):
-            self.app.push_screen(LogViewerScreen(item.log_path))
 
     async def action_dismiss(self, result: object = None) -> None:
         self.app.pop_screen()

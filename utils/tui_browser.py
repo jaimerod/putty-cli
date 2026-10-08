@@ -154,7 +154,6 @@ class SessionBrowser(App[int]):
         Binding("p", "ping", "Ping"),
         Binding("y", "copy", "Copy cmd"),
         Binding("l", "logs", "This session's log"),
-        Binding("L", "all_logs", "All logs"),
         Binding("escape", "blur_filter", "List"),
     ]
 
@@ -368,10 +367,6 @@ class SessionBrowser(App[int]):
             return
         from .tui_actions import LogViewerScreen
         self.push_screen(LogViewerScreen(logs[0][0]))
-
-    async def action_all_logs(self) -> None:
-        from .tui_actions import LogsScreen
-        self.push_screen(LogsScreen(self._logs_dir()))
 
     def _logs_dir(self) -> Path:
         from .logs_util import log_dir

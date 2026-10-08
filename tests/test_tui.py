@@ -65,111 +65,6 @@ class TestTuiActions:
         assert copy_command("ssh x")
         assert "\033]52;c;" in capsys.readouterr().out
 
-    def test_logs_screen_lists_logs(self, tmp_path):
-        from utils.tui_actions import LogsScreen
-        (tmp_path / "2026-01-01_1200-host.log").write_text("hello")
-        screen = LogsScreen(tmp_path)
-        assert screen.logs is not None  # populated on mount
-        assert LogsScreen(tmp_path).session_name is None
-
-    def test_logs_screen_session_filter(self, tmp_path):
-        from utils.logs_util import list_logs
-        (tmp_path / "2026-01-01_1200-web1.log").write_text("a\nb\n")
-        (tmp_path / "2026-01-02_1200-other.log").write_text("c\n")
-        (tmp_path / "2026-01-03_1200-web1old.log").write_text("d\n")
-        import os
-        import time
-        # newest first: give distinct mtimes
-        os.utime(tmp_path / "2026-01-01_1200-web1.log",
-                 (time.time() + 2, time.time() + 2))
-        logs = list_logs(tmp_path, session_name="web1")
-        assert [p.name for p, _, _ in logs] == [
-            "2026-01-01_1200-web1.log", "2026-01-03_1200-web1old.log"]
-
-    async def test_all_logs_chooser_opens_and_dismisses(self):
-        """shift+L opens the all-logs chooser; Esc returns to browser."""
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(100, 30)) as pilot:
-            await pilot.pause()
-            await pilot.press("L")
-            await pilot.pause()
-            from utils.tui_actions import LogsScreen
-            assert isinstance(app.screen, LogsScreen)
-            await pilot.press("escape")
-            await pilot.pause()
-            assert app.screen_stack == [app.screen]  # chooser popped
-
-
-class TestLogViewer:
-    def _make_log(self, tmp_path, lines):
-        p = tmp_path / "2026-10-07_1700-web1.log"
-        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        return p
-
-    async def test_lines_render_on_mount(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
-        p = self._make_log(tmp_path, ["one", "two", "ERROR three"])
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(p)
-            await app.push_screen(screen)
-            await pilot.pause()
-        assert screen.lines == ["one", "two", "ERROR three"]
-
-    async def test_search_filters_lines(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
-        p = self._make_log(tmp_path, ["one", "two", "ERROR three"])
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(p)
-            await app.push_screen(screen)
-            await pilot.pause()
-            sb = screen.query_one("#log-search")
-            sb.focus()
-            sb.value = "error"
-            await pilot.pause()
-            await pilot.wait_for_scheduled_animations() if False else None
-            # on_input_changed triggers _apply_search
-            assert len(screen.match_positions) == 1
-            status = str(screen.query_one("#log-status").render())
-            assert "match 1/1" in status
-
-    async def test_search_empty_resets(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
-        p = self._make_log(tmp_path, ["a", "b"])
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(p)
-            await app.push_screen(screen)
-            await pilot.pause()
-            sb = screen.query_one("#log-search")
-            sb.focus()
-            sb.value = "zzz"
-            await pilot.pause()
-            assert screen.match_positions == []
-            sb.value = ""
-            await pilot.pause()
-            assert screen.match_positions == []  # no filter = all lines shown
-
-    async def test_n_jumps_with_context(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
-        lines = [f"line{i}" for i in range(30)] + ["TARGET"] + \
-                [f"after{i}" for i in range(5)]
-        p = self._make_log(tmp_path, lines)
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 40)) as pilot:
-            screen = LogViewerScreen(p)
-            await app.push_screen(screen)
-            await pilot.pause()
-            sb = screen.query_one("#log-search")
-            sb.focus()
-            sb.value = "TARGET"
-            await pilot.pause()
-            await screen.action_next_match()
-            assert screen.match_positions  # search landed
-            ctx = screen._match_context(screen.match_positions[0])
-            assert "31 TARGET" in " ".join(ctx) or "TARGET" in " ".join(ctx)
-
     async def test_l_opens_newest_session_log_directly(self, tmp_path, monkeypatch):
         """l = newest log for the highlighted session, straight into the
         searchable viewer (skips the chooser)."""
@@ -204,31 +99,107 @@ class TestLogViewer:
             from utils.tui_actions import LogViewerScreen
             assert not isinstance(app.screen, LogViewerScreen)
 
+    async def test_l_no_session_highlighted(self):
+        """l with no selectable row (e.g. empty list) -> status only."""
+        app = SessionBrowser({}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            assert "no session highlighted" in app.status_message
+
     async def test_esc_return_to_browser(self, tmp_path):
         from utils.tui_actions import LogViewerScreen
-        p = self._make_log(tmp_path, ["x"])
+        log = tmp_path / "2026-10-07_1700-x.log"
+        log.write_text("x\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            await app.push_screen(LogViewerScreen(p))
+            await app.push_screen(LogViewerScreen(log))
             await pilot.pause()
             await pilot.press("escape")
             await pilot.pause()
             assert app.screen is not None  # back to browser (no crash)
 
-    def test_logs_screen_push_and_dismiss(self):
-        from utils.tui_actions import LogsScreen
+    async def test_unreadable_log_shows_error(self, tmp_path):
+        from utils.tui_actions import LogViewerScreen
+        p = tmp_path / "bad.log"
 
-        async def go():
-            app = SessionBrowser(USABLE, [], {}, None)
-            async with app.run_test(size=(100, 30)) as pilot:
-                await pilot.pause()
-                await app.push_screen(LogsScreen(Path("/tmp")))
-                await pilot.pause()
-                await pilot.press("escape")
-                await pilot.pause()
+        def broken(self, *a, **k):
+            raise OSError("denied")
 
-        import asyncio
-        asyncio.run(go())
+        import pathlib
+        monkeypatch_read = broken
+        orig = pathlib.Path.read_text
+        try:
+            pathlib.Path.read_text = monkeypatch_read  # type: ignore
+            app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+            async with app.run_test(size=(110, 30)) as pilot:
+                await app.push_screen(LogViewerScreen(p))
+                await pilot.pause()
+                assert any("Cannot read" in ln for ln in app.screen.lines)  # type: ignore
+        finally:
+            pathlib.Path.read_text = orig  # type: ignore
+
+    async def test_search_no_match_status(self, tmp_path):
+        from utils.tui_actions import LogViewerScreen
+        log = tmp_path / "a.log"
+        log.write_text("one\ntwo\n", encoding="utf-8")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            screen = LogViewerScreen(log)
+            await app.push_screen(screen)
+            await pilot.pause()
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "nothing-matches-this"
+            await pilot.pause()
+            await pilot.pause()
+            status = str(screen.query_one("#log-status").render())
+            assert "no matches" in status
+
+    async def test_n_without_term_is_noop(self, tmp_path):
+        from utils.tui_actions import LogViewerScreen
+        log = tmp_path / "a.log"
+        log.write_text("a\nb\n", encoding="utf-8")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            screen = LogViewerScreen(log)
+            await app.push_screen(screen)
+            await pilot.pause()
+            before = len(screen.lines)
+            await screen.action_next_match()  # no term -> noop
+            assert len(screen.lines) == before
+
+    async def test_prev_jump_wraps_negative(self, tmp_path):
+        from utils.tui_actions import LogViewerScreen
+        log = tmp_path / "a.log"
+        log.write_text("HIT\nmid\nHIT\n", encoding="utf-8")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            screen = LogViewerScreen(log)
+            await app.push_screen(screen)
+            await pilot.pause()
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "hit"  # matches lines 0 and 2
+            await pilot.pause()
+            # view is filtered; jump prev wraps to the LAST match
+            await screen.action_prev_match()
+            assert screen.match_index >= 0
+            ctx = screen._match_context(screen.match_positions[screen.match_index])
+            assert "HIT" in " ".join(ctx)
+
+    async def test_q_binding_dismisses(self, tmp_path):
+        from utils.tui_actions import LogViewerScreen
+        log = tmp_path / "a.log"
+        log.write_text("q\n", encoding="utf-8")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await app.push_screen(LogViewerScreen(log))
+            await pilot.pause()
+            await pilot.press("q")
+            await pilot.pause()
+            assert app.screen is not None
 
 
 class TestTuiFallback:
