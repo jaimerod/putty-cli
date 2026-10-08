@@ -93,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="run ssh directly without tmux (no session logging); "
              "also automatic when tmux is not installed",
     )
+    parser.add_argument(
+        "--tui", action="store_true",
+        help="use the Textual session browser (persistent UI with "
+             "filter + preview); requires 'pip install textual'; "
+             "falls back to the standard menu when missing",
+    )
     return parser
 
 
@@ -389,6 +395,42 @@ def handle_action(
     )
 
 
+def run_tui_browser(
+    usable: Dict[str, Dict[str, Any]],
+    recent_sessions: List[str],
+    recent_entries: Dict[str, Dict[str, object]],
+    reg_path: Path,
+    group_by_tag: bool = True,
+    no_record: bool = False,
+    no_tmux: bool = False,
+    dry_run: bool = False,
+) -> int:
+    """Run the Textual browser; falls back to the simple-term-menu flow
+    when textual isn't installed. Returns process exit code."""
+    try:
+        from utils.tui_browser import SessionBrowser
+    except ImportError:
+        print("Note: textual not installed; use the standard menu or "
+              "pip install 'putty-cli[tui]'.", file=sys.stderr)
+        return 90  # distinct code: caller can retry without --tui
+
+    recent_file = Path.home() / ".putty_recent_sessions"
+    use_tmux: Optional[bool] = False if no_tmux else None
+
+    def connect(name: str) -> int:
+        return connect_to_session(
+            name, usable[name], reg_path, recent_file,
+            record=not no_record, dry_run=dry_run, use_tmux=use_tmux,
+        )
+
+    app = SessionBrowser(
+        usable, recent_sessions, recent_entries, reg_path,
+        group_by_tag=group_by_tag, connect_callback=connect,
+    )
+    app.run()
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Main entry: parse args, load sessions, connect or show menu."""
     args = build_parser().parse_args(argv)
@@ -445,6 +487,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     recent_sessions: List[str] = load_recent_sessions(recent_file, usable)
     recent_entries = load_recent_entries(recent_file)
+
+    if args.tui:
+        return run_tui_browser(
+            usable, recent_sessions, recent_entries, reg_path,
+            group_by_tag=not args.flat,
+            no_record=args.no_record, no_tmux=args.no_tmux,
+            dry_run=args.dry_run,
+        )
+
     reg_stamp = file_stamp(reg_path)
 
     # Loop: session pick -> action -> maybe back to session pick
