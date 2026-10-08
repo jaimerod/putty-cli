@@ -119,20 +119,20 @@ def preview_text(
     if not cmd:
         return "(no hostname)"
     lines = [
-        "[b]ssh command[/b]",
+        "[b]SSH Command[/b]",
         "[green]" + shlex.join(cmd) + "[/green]",
         "",
-        "[b]options[/b]",
-        f"port       {session.get('PortNumber', '22')}",
-        f"user       {session.get('UserName', '-') or '-'}",
-        f"jump       {session.get('ProxyHost', '-') or '-'}"
+        "[b]Options[/b]",
+        f"Port        {session.get('PortNumber', '22')}",
+        f"User        {session.get('UserName', '-') or '-'}",
+        f"Jump Host   {session.get('ProxyHost', '-') or '-'}"
         if session.get("ProxyMethod", "0").strip() == "6" else
-        "jump       -",
-        f"key        {session.get('PublicKeyFile', '') or '-'}"
-        if session.get("PublicKeyFile", "").strip() else "key        -",
-        f"remote-cmd {session.get('RemoteCommand', '-') or '-'}"
-        if session.get("RemoteCommand", "").strip() else "remote-cmd -",
-        f"protocol   {session.get('Protocol', 'ssh')}",
+        "Jump Host   -",
+        f"Key         {session.get('PublicKeyFile', '') or '-'}"
+        if session.get("PublicKeyFile", "").strip() else "Key         -",
+        f"Remote Cmd  {session.get('RemoteCommand', '-') or '-'}"
+        if session.get("RemoteCommand", "").strip() else "Remote Cmd  -",
+        f"Protocol    {session.get('Protocol', 'ssh')}",
     ]
     return "\n".join(lines)
 
