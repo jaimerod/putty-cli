@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("textual")
 
 from textual import events
+from textual.color import Color
 
 import putty
 from utils.tui_actions import run_ping
@@ -456,10 +457,26 @@ class TestSessionActionMenu:
             await pilot.pause()
             assert isinstance(app.screen, SessionActionMenu)
 
+    async def test_menu_has_dos_shadow(self):
+        """Regression: shadow block started 0x0 (box region not computed
+        until first layout) so no drop shadow rendered. After mount +
+        refresh, shadow must match box size at +2/+1 with 50% black."""
+        app = SessionBrowser(
+            {"solo": {"HostName": "h"}}, [], {}, None,
+            connect_callback=lambda n: None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(self._click_on_row(app, 0))
+            for _ in range(5):
+                await pilot.pause()
+            box = app.screen.query_one("#ctx-menu")
+            shadow = app.screen.query_one("#ctx-shadow")
+            b, s = box.region, shadow.region
+            assert s.width == b.width and s.height == b.height
+            assert (s.x, s.y) == (b.x + 2, b.y + 1)
+            assert shadow.styles.background == Color(0, 0, 0, a=0.5)
+
     async def test_menu_is_transparent_over_browser(self):
-        """Regression: the popup screen painted opaque blue over the whole
-        browser (app-level `Screen{}` rule matched pushed screens too).
-        Menu screen must be transparent; browser screen keeps its blue."""
         from textual.color import Color
 
         app = SessionBrowser(

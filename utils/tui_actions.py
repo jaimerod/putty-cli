@@ -167,7 +167,8 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         y = min(self.cursor[1], max(0, size.height - box_h - 2))
         menu.styles.offset = (x, y)
         self._render_items()
-        self._sync_shadow()
+        # box.region is 0 until the first layout pass; sync after refresh
+        self.call_after_refresh(self._sync_shadow)
 
     def _sync_shadow(self) -> None:
         """Shadow matches the menu box exactly, offset +2/+1 (DOS)."""
