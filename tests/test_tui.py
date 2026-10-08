@@ -81,7 +81,6 @@ class TestBrowserApp:
             filt = app.query_one("#filter")
             filt.value = "prod"
             await pilot.pause()
-            lv = app.query_one("#sessions")
             names = [r.name for r in app.filtered_rows]
             assert all("prod" in n.lower() for n in names)
             assert len(names) == 2
