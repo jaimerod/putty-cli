@@ -249,9 +249,9 @@ class SessionBrowser(App[int]):
                                  markup=True)
         yield Static("", id="status")
         yield FARKeyBar(
-            [("Enter", "Connect"), ("2×Enter", "Connect now"),
-             ("RMB", "Menu"), ("/", "Find"), ("p", "Ping"), ("y", "Copy"),
-             ("l", "Log"), ("q", "Quit")]
+            [("Enter", "Connect"), ("LMB", "Select"),
+             ("2×LMB", "Connect"), ("RMB", "Menu"), ("/", "Find"),
+             ("p", "Ping"), ("y", "Copy"), ("l", "Log"), ("q", "Quit")]
         )
 
     def on_mount(self) -> None:
