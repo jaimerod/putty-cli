@@ -65,7 +65,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
     """
 
     DEFAULT_CSS = """
-    SessionActionMenu { background: transparent; }
+    SessionActionMenu { background: transparent !important; }
 
     #ctx-menu {
         layout: vertical;
@@ -112,12 +112,12 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
     }
 
     /* DOS drop shadow for the menu box: absolute black 50% offset 2,1 */
+    /* starts 0-sized; _sync_shadow() sizes it to the box + offset */
     #ctx-shadow {
         position: absolute;
-        width: 100%;
-        height: 100%;
+        width: 0;
+        height: 0;
         background: #000000 50%;
-        offset: 3 2;   /* follows the box offset below */
         layer: shadow;
     }
     """
@@ -167,9 +167,6 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         y = min(self.cursor[1], max(0, size.height - box_h - 2))
         menu.styles.offset = (x, y)
         self._render_items()
-        self._sync_shadow()
-
-    def on_resize(self, event: events.Resize) -> None:
         self._sync_shadow()
 
     def _sync_shadow(self) -> None:

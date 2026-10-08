@@ -455,6 +455,24 @@ class TestSessionActionMenu:
             await pilot.pause()
             await pilot.pause()
             assert isinstance(app.screen, SessionActionMenu)
+
+    async def test_menu_is_transparent_over_browser(self):
+        """Regression: the popup screen painted opaque blue over the whole
+        browser (app-level `Screen{}` rule matched pushed screens too).
+        Menu screen must be transparent; browser screen keeps its blue."""
+        from textual.color import Color
+
+        app = SessionBrowser(
+            {"solo": {"HostName": "h"}}, [], {}, None,
+            connect_callback=lambda n: None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(self._click_on_row(app, 0))
+            await pilot.pause()
+            await pilot.pause()
+            base, menu = app.screen_stack
+            assert menu.styles.background == Color(0, 0, 0, a=0)
+            assert base.styles.background == Color(0, 0, 170)
             # menu positioned near the click (row 0 -> region near top)
             menu = app.screen.query_one("#ctx-menu")
             assert abs(menu.region.x - app.screen._last_click_x) < 3 \

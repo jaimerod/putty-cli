@@ -167,7 +167,7 @@ class SessionBrowser(App[int]):
 
     CSS = """
     /* FAR palette: blue bg, silver text, cyan selection */
-    Screen { background: $background; }
+    .browser-bg { background: $background; }
     ListView { height: 1fr; background: $background; color: $foreground; }
     ListView > ListItem.--highlight { background: $primary; color: #000000; }
     #filter { dock: top; background: $background; color: $foreground;
@@ -256,6 +256,7 @@ class SessionBrowser(App[int]):
 
     def on_mount(self) -> None:
         install_far_theme(self)
+        self.screen.add_class("browser-bg")
         self.rows = build_rows(
             self.usable, self.recent_names, self.recent_entries,
             self.group_by_tag)
