@@ -12,7 +12,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, Label, RichLog, Static
 
-from .far_style import FARKeyBar
+from .far_style import FARKeyBar, KeyBarClicked
 
 
 def run_ping(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -372,18 +372,29 @@ class LogViewerScreen(Screen):
         yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
 
     KEYBAR_SCROLL = [
-        ("/", "Search"), ("n", "Next"), ("N", "Prev"), ("Esc", "Back"),
-        ("q", "Back"),
+        ("/", "Search", "focus_search"), ("n", "Next", "next_match"),
+        ("N", "Prev", "prev_match"),
+        ("Esc", "Back", "dismiss"), ("q", "Back", "dismiss"),
     ]
     KEYBAR_SEARCH = [
-        ("Enter", "Apply"), ("Esc", "Done"), ("n", "Next"), ("N", "Prev"),
+        ("Enter", "Apply", None), ("Esc", "Done", None),
+        ("n", "Next", "next_match"), ("N", "Prev", "prev_match"),
     ]
 
-    def _set_keybar(self, entries: List[Tuple[str, str]]) -> None:
+    def _set_keybar(self, entries: List[Tuple]) -> None:
         try:
             self.query_one("#keybar", FARKeyBar).set_entries(entries)
         except Exception:  # nosec B110 - not mounted yet
             pass
+
+    async def on_key_bar_clicked(
+        self, event: "KeyBarClicked"
+    ) -> None:
+        act = event.action
+        if act is None:
+            return
+        if hasattr(self, act):
+            await self.run_action(act)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         """Context-sensitive footer: search box vs scroll area hotkeys."""

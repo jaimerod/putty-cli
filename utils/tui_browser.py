@@ -23,6 +23,7 @@ from .far_style import (
     FARKeyBar,
     FarShadow,
     FarWindow,
+    KeyBarClicked,
     install_far_theme,
 )
 from .recent_sessions_util import format_relative_time
@@ -261,22 +262,25 @@ class SessionBrowser(App[int]):
         )
 
     KEYBAR_LIST = [
-        ("Enter", "Connect"), ("LMB", "Select"), ("2×LMB", "Connect"),
-        ("RMB", "Menu"), ("/", "Find"), ("p", "Ping"), ("y", "Copy"),
-        ("l", "Log"), ("q", "Quit"),
+        ("Enter", "Connect", "connect"), ("LMB", "Select", None),
+        ("2×LMB", "Connect", None), ("RMB", "Menu", None),
+        ("/", "Find", "focus_filter"), ("p", "Ping", "ping"),
+        ("y", "Copy", "copy"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
     ]
     KEYBAR_FILTER = [
-        ("Enter", "Pick+Connect"), ("Esc", "Back to list"),
-        ("q", "Quit"),
+        ("Enter", "Pick+Connect", None), ("Esc", "Back to list", "blur_filter"),
+        ("q", "Quit", "quit"),
     ]
     KEYBAR_MENU = [
-        ("↑↓", "Navigate"), ("Enter", "Select"), ("Esc", "Close"),
+        ("↑↓", "Navigate", None), ("Enter", "Select", None),
+        ("Esc", "Close", None),
     ]
     KEYBAR_LOG = [
-        ("/", "Search"), ("n", "Next"), ("N", "Prev"), ("Esc", "Back"),
+        ("/", "Search", None), ("n", "Next", None), ("N", "Prev", None),
+        ("Esc", "Back", None),
     ]
 
-    def _set_keybar(self, entries: List[Tuple[str, str]]) -> None:
+    def _set_keybar(self, entries: List[Tuple]) -> None:
         try:
             self.query_one("#keybar", FARKeyBar).set_entries(entries)
         except Exception:  # nosec B110 - not mounted yet
@@ -299,6 +303,14 @@ class SessionBrowser(App[int]):
     async def action_blur_filter(self) -> None:
         self.query_one("#sessions", ListView).focus()
         self._set_keybar(self.KEYBAR_LIST)
+
+    async def on_key_bar_clicked(
+        self, event: "KeyBarClicked"
+    ) -> None:
+        """Clickable FAR key bar: dispatch the slot's mapped action."""
+        act = event.action
+        if act and hasattr(self, f"action_{act}"):
+            await self.run_action(act)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         """Context-sensitive footer: filter vs session list hotkeys."""

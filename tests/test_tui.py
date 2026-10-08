@@ -663,7 +663,61 @@ class TestContextKeyBar:
     """The footer hotkey bar reflects the current UI context."""
 
     def _keybar_text(self, scope) -> str:
-        return str(scope.query_one("#keybar").render())
+        from utils.far_style import FARKeyBar
+        return scope.query_one("#keybar", FARKeyBar).bar_text()
+
+    async def test_keybar_slots_equal_width(self):
+        """FAR look: slots equally spaced across the full bar."""
+        from utils.far_style import KeyBarSlot
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            slots = list(app.query(KeyBarSlot))
+            assert len(slots) >= 6
+            widths = [s.region.width for s in slots]
+            assert max(widths) - min(widths) <= 1  # 1fr remainder only
+
+    async def test_keybar_slot_click_runs_action(self):
+        """Clicking a keybar slot dispatches its mapped action."""
+        from utils.far_style import KeyBarSlot
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            # click the '/ Find' slot -> filter input gains focus
+            find_slot = next(s for s in app.query(KeyBarSlot) if s.key == "/")
+            await pilot.click(find_slot)
+            await pilot.pause()
+            assert app.query_one("*:focus").id == "filter"
+
+    async def test_keybar_slot_click_quit(self):
+        from utils.far_style import KeyBarSlot
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            quit_slot = next(s for s in app.query(KeyBarSlot) if s.key == "q")
+            await pilot.click(quit_slot)
+            await pilot.pause()
+            assert not app.is_running
+
+    async def test_keybar_slot_colors(self):
+        """Key chip black/gray, description blue/black (FAR look)."""
+        from textual.color import Color
+
+        from utils.far_style import FARKeyBar
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            bar = app.query_one("#keybar", FARKeyBar)
+            from utils.far_style import KeyBarSlot
+            for child in bar.children:
+                if not isinstance(child, KeyBarSlot):
+                    continue
+                key_st = child.children[0].styles
+                desc_st = child.children[1].styles
+                assert key_st.background == Color(0, 0, 0)
+                assert key_st.color == Color(170, 170, 170)
+                assert desc_st.color == Color(255, 255, 255)
+                break
 
     async def test_filter_focus_swaps_keybar(self):
         app = SessionBrowser(USABLE, [], {}, None)
