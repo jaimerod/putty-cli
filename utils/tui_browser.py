@@ -127,6 +127,14 @@ def preview_text(
     return "\n".join(lines)
 
 
+class _SessionItem(ListItem):
+    """ListItem bound to its SessionRow (Textual 8 dropped ListItem.data)."""
+
+    def __init__(self, row: SessionRow, *widgets: Any) -> None:
+        super().__init__(*widgets)
+        self.row = row
+
+
 class SessionBrowser(App[int]):
     """putty-cli session browser; returns 0 normally, 1 on error."""
 
@@ -224,10 +232,8 @@ class SessionBrowser(App[int]):
         list_view.clear()
         for row in self.filtered_rows:
             selectable = not row.name.startswith("__")
-            item = ListItem(Static(row.display, markup=False))
-            if selectable:
-                item.data = {"session": row.name}  # type: ignore[assignment]
-            else:
+            item = _SessionItem(row, Static(row.display, markup=False))
+            if not selectable:
                 item.add_class("header")
                 item.disabled = True
             list_view.append(item)
@@ -252,11 +258,11 @@ class SessionBrowser(App[int]):
             return self.filtered_rows[lv.index]
         return None
 
-    async def on_list_view_selected(self, event: "ListView.Selected") -> None:
-        data = getattr(event.item, "data", None) or {}
-        name = data.get("session")
-        if name:
-            self.selected_name = name
+    async def on_list_view_selected(
+        self, event: "ListView.Selected"
+    ) -> None:
+        if isinstance(event.item, _SessionItem):
+            self.selected_name = event.item.row.name
             await self.action_connect()
 
     def on_list_view_highlight(self, event: ListView.Highlighted) -> None:
