@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from textual import events
+from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
@@ -182,29 +182,45 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
             event.stop()
             event.prevent_default()
 
-    def on_click(self, event: events.Click) -> None:
-        """Option click executes; click anywhere outside the box closes."""
+    def _option_index(self, widget: Any) -> Optional[int]:
+        """Index of the .ctx-option row containing `widget` (or None if
+        the widget is inside the box but not on an option row)."""
+        while widget is not None:
+            if isinstance(widget, Static) and "ctx-option" in widget.classes:
+                return list(self.query(".ctx-option")).index(widget)
+            widget = widget.parent
+        return None
+
+    def _inside_menu(self, event: events.MouseEvent) -> bool:
         menu = self.query_one("#ctx-menu")
-        inside = False
         widget: Any = event.widget
         while widget is not None:
             if widget is menu:
-                inside = True
-                break
+                return True
             widget = widget.parent
-        if not inside:
+        return False
+
+    @on(events.MouseMove)
+    def _on_hover(self, event: events.MouseMove) -> None:
+        """Hover over an option moves the highlight to it."""
+        if not self._inside_menu(event):
+            return
+        idx = self._option_index(event.widget)
+        if idx is not None and idx != self._index:
+            self._highlight(idx)
+        event.stop()
+
+    def on_click(self, event: events.Click) -> None:
+        """Left click on an option executes it; click outside closes."""
+        if not self._inside_menu(event):
             self.dismiss(None)
             event.stop()
             return
-        # click on an option row: execute it
-        while widget is not None and not (
-            isinstance(widget, Static) and "ctx-option" in widget.classes
-        ):
-            widget = widget.parent
-        if isinstance(widget, Static):
-            idx = list(self.query(".ctx-option")).index(widget)
+        idx = self._option_index(event.widget)
+        if idx is not None:
+            self._highlight(idx)
             self.dismiss(self.ITEMS[idx][1])
-            event.stop()
+        event.stop()
 
     async def action_cancel(self) -> None:
         self.dismiss(None)

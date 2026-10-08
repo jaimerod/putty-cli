@@ -10,6 +10,8 @@ import pytest
 
 pytest.importorskip("textual")
 
+from textual import events
+
 import putty
 from utils.tui_actions import run_ping
 from utils.tui_browser import SessionBrowser, build_rows, preview_text
@@ -586,6 +588,134 @@ class TestSessionActionMenu:
             await pilot.pause()
             await pilot.pause()
             assert not isinstance(app.screen, SessionActionMenu)
+
+
+class TestMenuMouseEvents:
+    """Hover moves the highlight; left click executes (popup menu)."""
+
+    def _mouse_event(self, cls, widget, button=0):
+        region = widget.region
+        return cls(
+            widget=widget,
+            x=region.x + 1, y=region.y + 1,
+            delta_x=0, delta_y=0,
+            button=button, shift=False, meta=False, ctrl=False,
+            screen_x=region.x + 1, screen_y=region.y + 1,
+            style=None,
+        )
+
+    async def test_hover_moves_highlight(self):
+        from textual.app import App
+
+        from utils.tui_actions import SessionActionMenu
+
+        class Host(App):
+            pass
+
+        app = Host()
+        async with app.run_test(size=(80, 24)) as pilot:
+            menu = SessionActionMenu("solo", (8, 5))
+            await app.push_screen(menu)
+            await pilot.pause()
+            await pilot.pause()
+            opt1 = list(menu.query(".ctx-option"))[1]  # Ping
+            assert menu._index == 0
+            menu.post_message(self._mouse_event(events.MouseMove, opt1))
+            await pilot.pause()
+            await pilot.pause()
+            assert menu._index == 1
+            assert "ping" not in (menu._dismissed or []) if hasattr(menu, "_dismissed") else True
+
+    async def test_hover_stays_inside_title(self):
+        from textual.app import App
+
+        from utils.tui_actions import SessionActionMenu
+
+        class Host(App):
+            pass
+
+        app = Host()
+        async with app.run_test(size=(80, 24)) as pilot:
+            menu = SessionActionMenu("solo", (8, 5))
+            await app.push_screen(menu)
+            await pilot.pause()
+            title = menu.query_one("#ctx-title")
+            menu.post_message(self._mouse_event(events.MouseMove, title))
+            await pilot.pause()
+            await pilot.pause()
+            assert menu._index == 0  # unchanged: title is not an option
+
+    async def test_left_click_executes_option(self):
+        from textual.app import App
+
+        from utils.tui_actions import SessionActionMenu
+
+        class Host(App):
+            pass
+
+        app = Host()
+        async with app.run_test(size=(80, 24)) as pilot:
+            results = []
+            menu = SessionActionMenu("solo", (8, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
+            await pilot.pause()
+            await pilot.pause()
+            opt2 = list(menu.query(".ctx-option"))[2]  # Copy
+            menu.post_message(self._mouse_event(events.Click, opt2, button=1))
+            await pilot.pause()
+            await pilot.pause()
+            assert results == ["copy"]
+
+    async def test_left_click_outside_executes_nothing(self):
+        from textual.app import App
+
+        from utils.tui_actions import SessionActionMenu
+
+        class Host(App):
+            pass
+
+        app = Host()
+        async with app.run_test(size=(80, 24)) as pilot:
+            results = []
+            menu = SessionActionMenu("solo", (8, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
+            await pilot.pause()
+            await pilot.pause()
+            # click on the host app's default screen content (outside menu)
+            evt = events.Click(
+                widget=app.screen, x=30, y=3, delta_x=0, delta_y=0,
+                button=1, shift=False, meta=False, ctrl=False,
+                screen_x=30, screen_y=3, style=None)
+            app.post_message(evt)
+            await pilot.pause()
+            await pilot.pause()
+            assert results == [None]
+
+    async def test_hover_then_click_same_row(self):
+        """Hover onto a row then left click on it: highlight syncs, runs."""
+        from textual.app import App
+
+        from utils.tui_actions import SessionActionMenu
+
+        class Host(App):
+            pass
+
+        app = Host()
+        async with app.run_test(size=(80, 24)) as pilot:
+            results = []
+            menu = SessionActionMenu("solo", (8, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
+            await pilot.pause()
+            await pilot.pause()
+            opt3 = list(menu.query(".ctx-option"))[3]  # View logs
+            menu.post_message(self._mouse_event(events.MouseMove, opt3))
+            await pilot.pause()
+            await pilot.pause()
+            assert menu._index == 3
+            menu.post_message(self._mouse_event(events.Click, opt3, button=1))
+            await pilot.pause()
+            await pilot.pause()
+            assert results == ["logs"]
 
 
 class TestClickGrammar:
