@@ -13,9 +13,18 @@ from textual import events
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
+from textual.widgets import Input, ListItem, ListView, Static
 
 from .display_util import make_display_pair, session_tag
+from .far_style import (
+    FAR_KEYBAR_CSS,
+    FAR_SHADOW_CSS,
+    FAR_WINDOW_CSS,
+    FARKeyBar,
+    FarShadow,
+    FarWindow,
+    install_far_theme,
+)
 from .recent_sessions_util import format_relative_time
 from .ssh_command_util import build_ssh_command
 from .titlecase_util import unquote_display
@@ -157,13 +166,27 @@ class SessionBrowser(App[int]):
     """putty-cli session browser; returns 0 normally, 1 on error."""
 
     CSS = """
+    /* FAR palette: blue bg, silver text, cyan selection */
+    Screen { background: $background; }
+    ListView { height: 1fr; background: $background; color: $foreground; }
+    ListView > ListItem.--highlight { background: $primary; color: #000000; }
+    #filter { dock: top; background: $background; color: $foreground;
+              border: hidden; height: 1; }
+    #title-bar { dock: top; height: 1; color: $secondary;
+                 background: $background; padding: 0 1; }
     #list-col { width: 2fr; }
-    #preview-col { width: 1fr; border-left: solid $primary; padding: 0 1; }
-    #preview { padding: 0 1; }
-    #filter { dock: top; }
-    ListView { height: 1fr; }
-    Static#status { dock: bottom; height: 1; color: $text-muted; padding: 0 1; }
-    """
+    #preview-col {
+        width: 1fr;
+        border-left: solid #AAAAAA;
+        padding: 0 1;
+        color: $foreground;
+        background: $background;
+    }
+    #preview { padding: 0 1; color: $foreground; }
+    Static#status { dock: bottom; height: 1; color: $primary;
+                    background: $background; padding: 0 1; }
+    FARKeyBar { dock: bottom; }
+    """ + FAR_SHADOW_CSS + FAR_WINDOW_CSS + FAR_KEYBAR_CSS
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -200,18 +223,39 @@ class SessionBrowser(App[int]):
         self.filtered_rows: List[SessionRow] = []
         self.status_message = ""
 
+    KEYBAR = [
+        ("F1", "help"), ("F3", "view log"), ("F4", "edit"),
+        ("F5", "copy cmd"), ("F6", "ping"), ("F7", "filter"),
+        ("F10", "quit"),
+    ]
+
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Input(placeholder="filter sessions…", id="filter")
+        yield Static(
+            " PuTTY Sessions  ▒  Enter connect · dbl-click connect · "
+            "right-click menu · / filter",
+            id="title-bar", markup=False,
+        )
+        yield Input(placeholder="/filter…", id="filter")
         with Horizontal():
+            # far-shadow mounts BEFORE its window -> renders underneath
             with Vertical(id="list-col"):
-                yield ListView(id="sessions")
+                yield FarShadow()
+                with FarWindow(id="list-win"):
+                    yield ListView(id="sessions")
             with Vertical(id="preview-col"):
-                yield Static("select a session", id="preview", markup=True)
+                yield FarShadow()
+                with FarWindow(id="preview-win"):
+                    yield Static("select a session", id="preview",
+                                 markup=True)
         yield Static("", id="status")
-        yield Footer()
+        yield FARKeyBar(
+            [("Enter", "connect"), ("2×Enter", "connect now"),
+             ("RMB", "menu"), ("/", "find"), ("p", "ping"), ("y", "copy"),
+             ("l", "log"), ("q", "quit")]
+        )
 
     def on_mount(self) -> None:
+        install_far_theme(self)
         self.rows = build_rows(
             self.usable, self.recent_names, self.recent_entries,
             self.group_by_tag)

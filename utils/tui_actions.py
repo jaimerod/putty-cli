@@ -10,7 +10,9 @@ from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+from textual.widgets import Input, Label, RichLog, Static
+
+from .far_style import FARKeyBar
 
 
 def run_ping(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -65,15 +67,17 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
     DEFAULT_CSS = """
     SessionActionMenu { background: transparent; }
 
-    /* the box: fits its content exactly, no stretching */
     #ctx-menu {
         layout: vertical;
-        background: #000000E0;
-        border: round #666666;
+        /* FAR menu: blue bg, silver single-line frame, DOS drop shadow
+           via Textual box-shadow (2 right, 1 down, translucent black) */
+        background: #0000AA;
+        border: solid #AAAAAA;
         width: auto;   /* sized to the widest child */
         height: auto;
         padding: 0;
-        layer: top;
+        layer: window;
+        box-sizing: border-box;
     }
 
     /* children must not claim free space */
@@ -83,30 +87,38 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         max-height: 16;
     }
 
-    /* title row */
     #ctx-title {
-        color: #888888;
-        text-style: none;
+        color: #FFFF55;   /* FAR: menu captions are yellow */
+        background: #0000AA;
         padding: 0 2;
         height: 1;
         width: auto;
     }
 
-    /* every option: grey text on black, single row, content width;
-       border spacing on the parent aligns rows to the longest label */
+    /* options: silver text on blue, full-row width */
     .ctx-option {
-        background: #000000;
-        color: #aaaaaa;
+        background: #0000AA;
+        color: #AAAAAA;
         padding: 0 2;
         height: 1;
         width: auto;
     }
 
-    /* selected option: reversed */
+    /* selected: FAR cursor bar - cyan with black text */
     .ctx-option.-selected {
-        background: #aaaaaa;
+        background: #00AAAA;
         color: #000000;
         text-style: bold;
+    }
+
+    /* DOS drop shadow for the menu box: absolute black 50% offset 2,1 */
+    #ctx-shadow {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background: #000000 50%;
+        offset: 3 2;   /* follows the box offset below */
+        layer: shadow;
     }
     """
 
@@ -138,6 +150,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         from textual.containers import VerticalScroll
+        yield Static("", id="ctx-shadow", markup=False)
         with Vertical(id="ctx-menu"):
             yield Label(self.session_name, id="ctx-title")
             with VerticalScroll(id="ctx-items"):
@@ -154,6 +167,22 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         y = min(self.cursor[1], max(0, size.height - box_h - 2))
         menu.styles.offset = (x, y)
         self._render_items()
+        self._sync_shadow()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_shadow()
+
+    def _sync_shadow(self) -> None:
+        """Shadow matches the menu box exactly, offset +2/+1 (DOS)."""
+        try:
+            box = self.query_one("#ctx-menu")
+            shadow = self.query_one("#ctx-shadow")
+        except Exception:  # noqa: BLE001 - widgets not mounted yet
+            return
+        if box.region.width:
+            shadow.styles.width = box.region.width
+            shadow.styles.height = box.region.height
+            shadow.styles.offset = (box.region.x + 2, box.region.y + 1)
 
     def _render_items(self) -> None:
         """(Re)apply the -selected class on exactly one option row."""
@@ -249,8 +278,33 @@ class LogViewerScreen(Screen):
         self.match_positions: List[int] = []
         self.match_index: int = -1
 
+    DEFAULT_CSS = """
+    LogViewerScreen { background: #0000AA; }
+    #log-search {
+        dock: top;
+        background: #0000AA;
+        color: #FFFF55;
+        border: hidden;
+        height: 1;
+        padding: 0 1;
+    }
+    #log-scroll {
+        border: solid #AAAAAA;
+        background: #0000AA;
+        margin: 1 2 1 2;
+    }
+    #log-status {
+        dock: bottom;
+        height: 1;
+        background: #0000AA;
+        color: #00AAAA;
+        padding: 0 2;
+    }
+    RichLog { background: #0000AA; color: #AAAAAA; }
+    """
+
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Static(f" {self.log_path.name}", id="log-title")
         yield Input(
             placeholder="/ search this log (n next match, N previous)",
             id="log-search",
@@ -259,7 +313,10 @@ class LogViewerScreen(Screen):
             yield RichLog(id="log-view", wrap=False, highlight=False,
                           max_lines=self.max_lines)
         yield Static("", id="log-status")
-        yield Footer()
+        yield FARKeyBar([
+            ("/", "search"), ("n", "next"), ("N", "prev"),
+            ("Esc", "back"),
+        ])
 
     def on_mount(self) -> None:
         self._load()
