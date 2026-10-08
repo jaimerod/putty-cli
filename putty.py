@@ -148,7 +148,7 @@ def build_and_connect(
     if use_tmux is None:
         use_tmux = shutil.which("tmux") is not None
     return (
-        *build_ssh_command(selected_name, session,
+        *build_ssh_command(unquote_display(selected_name), session,
                            reg_path=reg_path, tmux=use_tmux),
         use_tmux,
     )
@@ -312,20 +312,22 @@ def looks_like_tmux_argv(cmd: List[str]) -> bool:
 def attach_tmux_session(launch_argv: List[str]) -> int:
     """Phase 2 after a detached tmux launch: attach to the session/window.
 
+    Outside tmux the launch created session NAME (-s NAME); attach to it.
+    Inside tmux the launch created window NAME (-n NAME); switch-client to
+    it (tmux >= 3.1 accepts '=session:window' targets; we target the
+    window of our current session via the name).
+
     Returns the attach exit code; 0 when attachment isn't applicable."""
-    # Target: the -n name of the launch (session name outside tmux,
-    # window name inside). Find the session created by the launch.
     try:
         name = launch_argv[launch_argv.index("-n") + 1]
     except (ValueError, IndexError):
         return 0
     if os.environ.get("TMUX"):
-        # Inside tmux: new-window already attached our current client's
-        # focus only if switch-client was used; do it now.
-        argv = ["tmux", "switch-client", "-t", name]
+        # window target: current session's window named NAME
+        argv = ["tmux", "switch-client", "-t", f":{name}"]
     else:
-        # Outside tmux: attach to the (self-destroying) session.
-        argv = ["tmux", "attach-session", "-t", name]
+        # session target: exact-name match with '=' prefix
+        argv = ["tmux", "attach-session", "-t", f"={name}"]
     try:
         # argv from our own builder; 'tmux' partial path is conventional
         result = subprocess.run(argv, check=False)  # nosec B603, B607

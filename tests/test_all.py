@@ -849,6 +849,38 @@ class TestMoshAndExtraArgs:
         # and the argv contains NO shell (no 'sh','-c')
         assert "sh" not in argv[:3]
 
+    def test_outside_tmux_names_session_explicitly(self, tmp_path, monkeypatch):
+        """Regression: outside tmux, `new-session -n NAME` names only the
+        window (tmux auto-names the session '0'), so attach-session -t NAME
+        failed with 'can't find session'. Must pass -s NAME too, and
+        set-option/pipe-pane must use plain-name targets (the '=' exact
+        prefix is session-match syntax those commands reject)."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.delenv("TMUX", raising=False)
+        argv, _ = build_ssh_command(
+            "My Session", {"HostName": "h"}, reg_path=tmp_path / "r.reg",
+            tmux=True,
+        )
+        s_idx = argv.index("-s")
+        assert argv[s_idx + 1] == "My_Session"          # session named
+        assert argv[argv.index("-n") + 1] == "My_Session"
+        so_idx = argv.index("set-option")
+        assert argv[so_idx + 2] == "My_Session"         # plain target (no '=')
+        pp_idx = argv.index("pipe-pane")
+        assert argv[pp_idx + 2] == "My_Session"         # plain target (no '=')
+        assert argv[argv.index("destroy-unattached") + 1] == "on"
+
+    def test_inside_tmux_targets_window(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setenv("TMUX", "/tmp/tmux-0/default,0,0")
+        argv, _ = build_ssh_command(
+            "s", {"HostName": "h"}, reg_path=tmp_path / "r.reg", tmux=True,
+        )
+        assert argv[1] == "new-window"
+        assert "set-option" not in argv  # window needs no destroy-unattached
+        pp_idx = argv.index("pipe-pane")
+        assert argv[pp_idx + 2] == "s"
+
     def test_attach_tmux_session_outside(self, monkeypatch, tmp_path):
         import subprocess as sp
         launches = []
@@ -859,9 +891,12 @@ class TestMoshAndExtraArgs:
         )
         from putty import attach_tmux_session
         rc = attach_tmux_session(
-            ["tmux", "new-session", "-d", "-n", "s", "ssh h", ";", "pipe-pane"])
+            ["tmux", "new-session", "-d", "-s", "My_Session", "-n", "My_Session",
+             "ssh h", ";", "pipe-pane"])
         assert rc == 0
-        assert launches[-1][:3] == ["tmux", "attach-session", "-t"]
+        target = launches[-1]
+        assert target[:2] == ["tmux", "attach-session"]
+        assert target[3] == "=My_Session"  # exact-name session target
 
     def test_attach_tmux_session_inside(self, monkeypatch, tmp_path):
         import subprocess as sp
@@ -871,12 +906,13 @@ class TestMoshAndExtraArgs:
             lambda argv, **k: launches.append(argv)
             or sp.CompletedProcess(argv, 0),
         )
-        monkeypatch.setenv("TMUX", "/tmp/x,0,0")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-0/default,0,0")
         from putty import attach_tmux_session
         rc = attach_tmux_session(
             ["tmux", "new-window", "-d", "-n", "w", "ssh h", ";", "pipe-pane"])
         assert rc == 0
         assert launches[-1][:3] == ["tmux", "switch-client", "-t"]
+        assert launches[-1][3] == ":w"  # window target on current session
 
     def test_attach_no_name_noop(self):
         from putty import attach_tmux_session

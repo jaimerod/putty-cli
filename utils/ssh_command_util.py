@@ -188,13 +188,19 @@ def _wrap_tmux(
 ) -> List[str]:
     """Wrap an argv in a tmux launch that pipes the pane to a log file.
 
-    In tmux: opens a new window. Outside: a self-destroying new session.
     tmux accepts commands separated by ';' as plain argv tokens, so no
     shell is invoked - injection-safe by construction.
 
+    Outside tmux: `new-session -d -s NAME -n WNAME` creates a session we
+    explicitly name (auto-naming would make attach impossible to target)
+    plus destroy-unattached so it vanishes on detach. putty.py attaches
+    afterwards by that exact name.
+
+    Inside tmux: `new-window -d -n WNAME` opens a window named WNAME;
+    pipe-pane then targets that window.
+
     Launch is detached (-d) with pipe-pane started immediately, so the
-    log captures the session from the first screenful; putty.py then
-    attaches explicitly.
+    log captures the session from the first screenful.
     """
     timestamp = time.strftime("%Y-%m-%d_%H%M")
     log_dir = os.environ.get("PUTTY_LOG_DIR")
@@ -209,7 +215,14 @@ def _wrap_tmux(
     in_tmux = bool(os.environ.get("TMUX"))
     name = safe_name(session_name)
     argv = ["tmux"]
-    argv += ["new-window", "-d"] if in_tmux else ["new-session", "-d"]
-    argv += ["-n", name, " ".join(shlex.quote(a) for a in parts), ";"]
+    if in_tmux:
+        argv += ["new-window", "-d", "-n", name,
+                 " ".join(shlex.quote(a) for a in parts), ";"]
+    else:
+        argv += ["new-session", "-d", "-s", name, "-n", name,
+                 " ".join(shlex.quote(a) for a in parts), ";",
+                 "set-option", "-t", name, "destroy-unattached", "on", ";"]
+    # plain-name targets; the '=' exact-match prefix is accepted by
+    # session-targeting commands (has-session/attach) but not set-option
     argv += ["pipe-pane", "-t", name, "-o", f"cat >> {shlex.quote(log_file)}"]
     return argv
