@@ -177,7 +177,7 @@ class SessionBrowser(App[int]):
     ListView { height: 1fr; background: $background; color: $foreground; }
     ListView > ListItem.--highlight { background: $primary; color: #000000; }
     #filter { dock: top; background: $background; color: $foreground;
-              border: hidden; height: 1; }
+             border: solid #AAAAAA; margin: 0 1 1 1; }
     #title-bar { dock: top; height: 1; color: $secondary;
                  background: $background; padding: 0 1; }
     #list-col { width: 2fr; }
