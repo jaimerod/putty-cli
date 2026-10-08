@@ -15,9 +15,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tui = [
+    "textual>=0.85",
+]
 dev = [
     "pytest>=8",
     "pytest-cov>=5",
+    "pytest-textual-snapshot>=1",
     "mypy>=1.10",
     "ruff>=0.6",
     "bandit>=1.7",
