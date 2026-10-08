@@ -153,7 +153,8 @@ class SessionBrowser(App[int]):
         Binding("enter", "connect", "Connect"),
         Binding("p", "ping", "Ping"),
         Binding("y", "copy", "Copy cmd"),
-        Binding("l", "logs", "Logs"),
+        Binding("l", "logs", "This session's log"),
+        Binding("L", "all_logs", "All logs"),
         Binding("escape", "blur_filter", "List"),
     ]
 
@@ -352,6 +353,23 @@ class SessionBrowser(App[int]):
         self._update_status()
 
     async def action_logs(self) -> None:
+        """Newest log for the highlighted session, in the searchable viewer."""
+        sel = self._selected_session()
+        if sel is None:
+            self.status_message = "no session highlighted"
+            self._update_status()
+            return
+        from .logs_util import list_logs
+        logs = list_logs(self._logs_dir(), limit=10,
+                         session_name=sel[0])
+        if not logs:
+            self.status_message = f"no logs yet for {unquote_display(sel[0])}"
+            self._update_status()
+            return
+        from .tui_actions import LogViewerScreen
+        self.push_screen(LogViewerScreen(logs[0][0]))
+
+    async def action_all_logs(self) -> None:
         from .tui_actions import LogsScreen
         self.push_screen(LogsScreen(self._logs_dir()))
 

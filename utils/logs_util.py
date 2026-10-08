@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .ssh_command_util import safe_name
+
 VIEWER_KEYS = {"n": "-N", "v": "-V"}
 
 
@@ -14,14 +16,22 @@ def log_dir() -> Path:
                 or (Path.home() / ".putty-cli" / "logs")).expanduser()
 
 
-def list_logs(directory: Optional[Path] = None, limit: int = 30) -> List[Tuple[Path, int, float]]:
-    """Recent log files as (path, size_bytes, mtime), newest first."""
+def list_logs(directory: Optional[Path] = None, limit: int = 30,
+              session_name: Optional[str] = None,
+              ) -> List[Tuple[Path, int, float]]:
+    """Recent log files as (path, size_bytes, mtime), newest first.
+
+    With session_name, only logs whose filename contains the sanitized
+    session name (putty-cli's 'TIMESTAMP-NAME.log' convention)."""
     d = directory or log_dir()
     if not d.is_dir():
         return []
+    prefix = safe_name(session_name) if session_name else None
     logs = [
         (p, p.stat().st_size, p.stat().st_mtime)
         for p in d.glob("*.log") if p.is_file()
+        and (prefix is None or f"-{prefix}" in p.name
+             or p.name == f"{prefix}.log")
     ]
     logs.sort(key=lambda t: t[2], reverse=True)
     return logs[:limit]
