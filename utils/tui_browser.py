@@ -156,7 +156,12 @@ async def app_push_screen(
     """Push a modal and dispatch its dismiss result (Textual 8: awaiting
     push_screen() waits for MOUNT, not the result - callback form is the
     only way to receive the dismiss value without a worker)."""
+    # The modal is transparent: the app's footer shows through, so swap
+    # it to the keys that work while the menu is open, restore on close.
+    app._set_keybar(SessionBrowser.KEYBAR_MENU)
+
     def on_result(action: Optional[str]) -> None:
+        app._set_keybar(SessionBrowser.KEYBAR_LIST)
         app.call_later(app._run_chosen_action, action, session_name)
 
     app.push_screen(modal, callback=on_result)
@@ -177,7 +182,6 @@ class SessionBrowser(App[int]):
     #list-col { width: 2fr; }
     #preview-col {
         width: 1fr;
-        border-left: solid #AAAAAA;
         padding: 0 1;
         color: $foreground;
         background: $background;
@@ -186,6 +190,7 @@ class SessionBrowser(App[int]):
     Static#status { dock: bottom; height: 1; color: $primary;
                     background: $background; padding: 0 1; }
     FARKeyBar { dock: bottom; }
+    FARKeyBar#ctx-keybar { dock: bottom; }
     """ + FAR_SHADOW_CSS + FAR_WINDOW_CSS + FAR_KEYBAR_CSS
 
     BINDINGS = [
@@ -251,8 +256,31 @@ class SessionBrowser(App[int]):
         yield FARKeyBar(
             [("Enter", "Connect"), ("LMB", "Select"),
              ("2×LMB", "Connect"), ("RMB", "Menu"), ("/", "Find"),
-             ("p", "Ping"), ("y", "Copy"), ("l", "Log"), ("q", "Quit")]
+             ("p", "Ping"), ("y", "Copy"), ("l", "Log"), ("q", "Quit")],
+            id="keybar",
         )
+
+    KEYBAR_LIST = [
+        ("Enter", "Connect"), ("LMB", "Select"), ("2×LMB", "Connect"),
+        ("RMB", "Menu"), ("/", "Find"), ("p", "Ping"), ("y", "Copy"),
+        ("l", "Log"), ("q", "Quit"),
+    ]
+    KEYBAR_FILTER = [
+        ("Enter", "Pick+Connect"), ("Esc", "Back to list"),
+        ("q", "Quit"),
+    ]
+    KEYBAR_MENU = [
+        ("↑↓", "Navigate"), ("Enter", "Select"), ("Esc", "Close"),
+    ]
+    KEYBAR_LOG = [
+        ("/", "Search"), ("n", "Next"), ("N", "Prev"), ("Esc", "Back"),
+    ]
+
+    def _set_keybar(self, entries: List[Tuple[str, str]]) -> None:
+        try:
+            self.query_one("#keybar", FARKeyBar).set_entries(entries)
+        except Exception:  # nosec B110 - not mounted yet
+            pass
 
     def on_mount(self) -> None:
         install_far_theme(self)
@@ -266,9 +294,23 @@ class SessionBrowser(App[int]):
 
     async def action_focus_filter(self) -> None:
         self.query_one("#filter", Input).focus()
+        self._set_keybar(self.KEYBAR_FILTER)
 
     async def action_blur_filter(self) -> None:
         self.query_one("#sessions", ListView).focus()
+        self._set_keybar(self.KEYBAR_LIST)
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """Context-sensitive footer: filter vs session list hotkeys."""
+        widget = event.widget
+        try:
+            sessions = self.query_one("#sessions", ListView)
+        except Exception:  # noqa: BLE001 - not mounted yet
+            return
+        if isinstance(widget, Input) and widget.id == "filter":
+            self._set_keybar(self.KEYBAR_FILTER)
+        elif widget is sessions:
+            self._set_keybar(self.KEYBAR_LIST)
 
     def on_input_changed(self, event: "Input.Changed") -> None:
         if event.input.id == "filter":
@@ -388,7 +430,10 @@ class SessionBrowser(App[int]):
 
     async def run_action_with_modal(self, session_name: str) -> None:
         from .tui_actions import SessionActionMenu
-        modal = SessionActionMenu(unquote_display(session_name), self._last_cursor)
+        underlying = self.screen_stack[-1] if self.screen_stack else None
+        modal = SessionActionMenu(
+            unquote_display(session_name), self._last_cursor,
+            underlying=underlying)
         await app_push_screen(self, modal, session_name)
 
     async def _run_chosen_action(self, action: Optional[str], name: str) -> None:
@@ -503,7 +548,11 @@ class SessionBrowser(App[int]):
             self._update_status()
             return
         from .tui_actions import LogViewerScreen
-        self.push_screen(LogViewerScreen(logs[0][0]))
+        self._set_keybar(self.KEYBAR_LOG)
+        self.push_screen(
+            LogViewerScreen(logs[0][0]),
+            callback=lambda _r: self._set_keybar(self.KEYBAR_LIST),
+        )
 
     def _logs_dir(self) -> Path:
         from .logs_util import log_dir

@@ -22,6 +22,7 @@ from textual.widgets import Static
 
 # ── FAR classic palette (VGA 6-bit values) ──────────────────────────────────
 FAR_BLUE = "#0000AA"      # panel/dialog background
+FAR_LIGHTBLUE = "#5555FF" # popup menus / dialog captions background
 FAR_AQUA = "#00AAAA"      # cursor bar / selected row
 FAR_SILVER = "#AAAAAA"    # normal text
 FAR_WHITE = "#FFFFFF"     # bright text
@@ -58,10 +59,10 @@ FarWindow {
 }
 """
 
-# FAR-style window frame: silver single-line border on blue.
+# FAR-style window frame: silver double-line border on blue.
 FAR_WINDOW_CSS = """
 FarWindow {
-    border: solid #AAAAAA;
+    border: double #AAAAAA;
     background: #0000AA;
     width: 1fr;
     height: 1fr;
@@ -103,7 +104,7 @@ class FarShadow(Static):
 
 
 class FarWindow(Vertical, can_focus=False):
-    """FAR-style window: silver single-line frame on blue. Give it an
+    """FAR-style window: silver double-line frame on blue. Give it an
     id and include FAR_WINDOW_CSS in the app's CSS."""
 
     def __init__(self, *children, title: str = "", **kwargs) -> None:
@@ -115,10 +116,15 @@ class FARKeyBar(Static):
     """FAR-style function-key bar (bottom line): key names yellow,
     labels silver, optional status message on the right in cyan."""
 
-    def __init__(self, entries: Sequence[Tuple[str, str]]) -> None:
-        super().__init__(markup=True)
+    def __init__(self, entries: Sequence[Tuple[str, str]], **kwargs) -> None:
+        super().__init__(markup=True, **kwargs)
         self.entries = list(entries)
         self.status = ""
+        self.update(self._build())
+
+    def set_entries(self, entries: Sequence[Tuple[str, str]]) -> None:
+        """Swap the key/label set (context-sensitive hotkey hints)."""
+        self.entries = list(entries)
         self.update(self._build())
 
     def _build(self) -> str:

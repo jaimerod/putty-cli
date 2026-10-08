@@ -56,11 +56,49 @@ def _size_str(size: int) -> str:
     return f"{size}B"
 
 
+def _region_text(screen: Any, x: int, y: int,
+                 width: int, height: int) -> List[str]:
+    """Reconstruct the plain text shown in a screen rectangle by walking
+    the widget tree and stamping each single-line label's content at its
+    own region (list rows, titles, preview labels, ...). Containers are
+    skipped; only leaf widgets with text contribute.
+
+    This is the data for the drop shadow's 'fake transparency': the
+    shadow echoes the content it covers in dimmed light-gray text.
+    """
+    grid = [list(" " * width) for _ in range(height)]
+
+    def visit(widget: Any) -> None:
+        label = widget.content if isinstance(widget, (Static, Label)) else ""
+        region = getattr(widget, "region", None)
+        if label and region is not None and region.height == 1:
+            ry = region.y - y
+            if 0 <= ry < height:
+                row = grid[ry]
+                text = str(label)
+                rx = region.x - x
+                for i, ch in enumerate(text):
+                    col = rx + i
+                    if 0 <= col < width:
+                        row[col] = ch
+        for child in getattr(widget, "children", ()):
+            visit(child)
+
+    try:
+        visit(screen)
+    except Exception:  # nosec B110 - headless screen not ready
+        pass
+    return ["".join(row) for row in grid]
+
+
 class SessionActionMenu(ModalScreen[Optional[str]]):
-    """Cursor-positioned context menu (popup) for one session.
+    """    Cursor-positioned context menu (popup) for one session.
 
     A small option box opens where the cursor is; arrows navigate,
-    Enter executes, Esc or clicking outside closes. Dismiss result:
+    Enter executes, Esc or clicking outside closes. The drop shadow
+    underneath echoes the screen content it covers in dimmed light-gray
+    text - a 'fake transparency' trick (FAR-style) so the shadow reads
+    as a translucent layer rather than an opaque slab. Dismiss result:
     'connect' | 'ping' | 'copy' | 'logs' | None.
     """
 
@@ -69,9 +107,8 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
 
     #ctx-menu {
         layout: vertical;
-        /* FAR menu: blue bg, silver single-line frame, DOS drop shadow
-           via Textual box-shadow (2 right, 1 down, translucent black) */
-        background: #0000AA;
+        /* FAR popup-dialog scheme: lighter blue background, silver frame */
+        background: #5555FF;
         border: solid #AAAAAA;
         width: auto;   /* sized to the widest child */
         height: auto;
@@ -88,36 +125,39 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
     }
 
     #ctx-title {
-        color: #FFFF55;   /* FAR: menu captions are yellow */
-        background: #0000AA;
+        color: #000000;   /* FAR popup titles: black on light blue */
+        background: #5555FF;
+        text-style: bold;
         padding: 0 2;
         height: 1;
         width: auto;
     }
 
-    /* options: silver text on blue, full-row width */
+    /* options: black text on light blue, full-row width */
     .ctx-option {
-        background: #0000AA;
-        color: #AAAAAA;
+        background: #5555FF;
+        color: #000000;
         padding: 0 2;
         height: 1;
         width: auto;
     }
 
-    /* selected: FAR cursor bar - cyan with black text */
+    /* selected: reversed (light blue text on black) */
     .ctx-option.-selected {
-        background: #00AAAA;
-        color: #000000;
+        background: #000000;
+        color: #5555FF;
         text-style: bold;
     }
 
-    /* DOS drop shadow for the menu box: absolute black 50% offset 2,1 */
-    /* starts 0-sized; _sync_shadow() sizes it to the box + offset */
+    /* DOS drop shadow for the menu box: echoes the covered content in
+       dimmed light-gray text over a translucent black backdrop. Starts
+       0-sized; _sync_shadow() sizes it to the box + offset and fills it. */
     #ctx-shadow {
         position: absolute;
         width: 0;
         height: 0;
         background: #000000 50%;
+        color: #AAAAAA 40%;
         layer: shadow;
     }
     """
@@ -133,11 +173,16 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         ("View logs", "logs"),
     ]
 
-    def __init__(self, session_name: str, cursor: tuple[int, int]) -> None:
+    def __init__(self, session_name: str, cursor: tuple[int, int],
+                 underlying: Any = None) -> None:
         super().__init__()
         self.session_name = session_name
         self.cursor = cursor
         self._index = 0
+        # Screen stack entry directly below this modal: its compositor
+        # still holds the raster the menu was opened over, which is what
+        # fills the drop shadow (fake transparency).
+        self._underlying = underlying
 
     def _build_option(self, label: str) -> Static:
         # pad all rows to the longest label so the highlight bar spans
@@ -150,7 +195,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         from textual.containers import VerticalScroll
-        yield Static("", id="ctx-shadow", markup=False)
+        yield Static("", id="ctx-shadow", markup=True)
         with Vertical(id="ctx-menu"):
             yield Label(self.session_name, id="ctx-title")
             with VerticalScroll(id="ctx-items"):
@@ -171,16 +216,29 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         self.call_after_refresh(self._sync_shadow)
 
     def _sync_shadow(self) -> None:
-        """Shadow matches the menu box exactly, offset +2/+1 (DOS)."""
+        """Shadow matches the menu box exactly, offset +2/+1 (DOS), and
+        its text echoes the screen content it covers in dimmed gray."""
         try:
-            box = self.query_one("#ctx-menu")
-            shadow = self.query_one("#ctx-shadow")
+            box = self.query_one("#ctx-menu", Vertical)
+            shadow = self.query_one("#ctx-shadow", Static)
         except Exception:  # noqa: BLE001 - widgets not mounted yet
             return
-        if box.region.width:
-            shadow.styles.width = box.region.width
-            shadow.styles.height = box.region.height
-            shadow.styles.offset = (box.region.x + 2, box.region.y + 1)
+        if not box.region.width:
+            return
+        sx = box.region.x + 2
+        sy = box.region.y + 1
+        shadow.styles.width = box.region.width
+        shadow.styles.height = box.region.height
+        shadow.styles.offset = (sx, sy)
+        if self._underlying is None:
+            return
+        lines = _region_text(self._underlying, sx, sy,
+                             box.region.width, box.region.height)
+        # escape Rich markup chars so echoed content renders verbatim
+        from rich.markup import escape as escape_markup
+        dimmed = [f"[#AAAAAA]{escape_markup(line.rstrip())}[/]"
+                  if line.strip() else "" for line in lines]
+        shadow.update("\n".join(dimmed))
 
     def _render_items(self) -> None:
         """(Re)apply the -selected class on exactly one option row."""
@@ -311,10 +369,32 @@ class LogViewerScreen(Screen):
             yield RichLog(id="log-view", wrap=False, highlight=False,
                           max_lines=self.max_lines)
         yield Static("", id="log-status")
-        yield FARKeyBar([
-            ("/", "Search"), ("n", "Next"), ("N", "Prev"),
-            ("Esc", "Back"),
-        ])
+        yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
+
+    KEYBAR_SCROLL = [
+        ("/", "Search"), ("n", "Next"), ("N", "Prev"), ("Esc", "Back"),
+        ("q", "Back"),
+    ]
+    KEYBAR_SEARCH = [
+        ("Enter", "Apply"), ("Esc", "Done"), ("n", "Next"), ("N", "Prev"),
+    ]
+
+    def _set_keybar(self, entries: List[Tuple[str, str]]) -> None:
+        try:
+            self.query_one("#keybar", FARKeyBar).set_entries(entries)
+        except Exception:  # nosec B110 - not mounted yet
+            pass
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        """Context-sensitive footer: search box vs scroll area hotkeys."""
+        try:
+            if isinstance(event.widget, Input) and \
+                    event.widget.id == "log-search":
+                self._set_keybar(self.KEYBAR_SEARCH)
+            else:
+                self._set_keybar(self.KEYBAR_SCROLL)
+        except Exception:  # nosec B110 - not mounted yet
+            pass
 
     def on_mount(self) -> None:
         self._load()

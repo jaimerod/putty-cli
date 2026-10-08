@@ -625,6 +625,97 @@ class TestSessionActionMenu:
             assert not isinstance(app.screen, SessionActionMenu)
 
 
+    async def test_menu_shadow_echoes_underlying_content(self):
+        """The drop shadow echoes the text it covers (fake transparency)."""
+        from utils.tui_actions import SessionActionMenu
+        app = SessionBrowser(
+            {"prod:web-1": {"HostName": "a.example.com"},
+             "prod:web-2": {"HostName": "b.example.com"},
+             "solo": {"HostName": "d.example.com"}}, [], {}, None,
+            connect_callback=lambda n: None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            # click the row under a group header; the menu opens there and
+            # its shadow covers the solo row and the OTHER header below it
+            app.post_message(self._click_on_row(app, 1))
+            for _ in range(9):
+                await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)
+            shadow = app.screen.query_one("#ctx-shadow")
+            text = str(shadow.render())
+            assert text.strip()  # non-empty shadow content
+            assert "lo" in text or "OTHER" in text  # covered rows echo
+
+    async def test_menu_shadow_empty_without_underlying(self):
+        """Direct push (no underlying screen passed) -> plain shadow."""
+        from utils.tui_actions import SessionActionMenu
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            menu = SessionActionMenu("solo", (5, 5))
+            await app.push_screen(menu)
+            for _ in range(5):
+                await pilot.pause()
+            shadow = menu.query_one("#ctx-shadow")
+            assert str(shadow.render()).strip() == ""
+
+
+class TestContextKeyBar:
+    """The footer hotkey bar reflects the current UI context."""
+
+    def _keybar_text(self, scope) -> str:
+        return str(scope.query_one("#keybar").render())
+
+    async def test_filter_focus_swaps_keybar(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            text = self._keybar_text(app)
+            assert "Find" in text  # list context
+            await pilot.press("slash")
+            await pilot.pause()
+            text = self._keybar_text(app)
+            assert "Back to list" in text and "Find" not in text
+            await pilot.press("escape")
+            await pilot.pause()
+            text = self._keybar_text(app)
+            assert "Find" in text  # back to list context
+
+    async def test_right_click_menu_swaps_app_keybar(self):
+        from utils.tui_actions import SessionActionMenu
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(TestSessionActionMenu()._click_on_row(app, 0))
+            await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)
+            text = self._keybar_text(app)
+            assert "Navigate" in text and "Close" in text
+            assert "Find" not in text  # list hotkeys hidden while menu open
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.pause()
+            text = self._keybar_text(app)
+            assert "Find" in text  # restored after close
+
+    async def test_log_viewer_keybar_reacts_to_search_focus(self, tmp_path):
+        from utils.tui_actions import LogViewerScreen
+        log = tmp_path / "a.log"
+        log.write_text("one\ntwo\n", encoding="utf-8")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            screen = LogViewerScreen(log)
+            await app.push_screen(screen)
+            await pilot.pause()
+            text = self._keybar_text(screen)
+            assert "Search" in text and "Back" in text
+            screen.query_one("#log-search").focus()
+            await pilot.pause()
+            text = self._keybar_text(screen)
+            assert "Apply" in text and "Done" in text
+            assert "Search" not in text
+
+
 class TestMenuMouseEvents:
     """Hover moves the highlight; left click executes (popup menu)."""
 
