@@ -833,28 +833,30 @@ class TestBuildSshCommand:
 # ── Mosh (item 6) + CommandLineArgs (item 5) ─────────────────────────────────
 
 class TestMoshAndExtraArgs:
-    def test_wrap_tmux_detached_two_phase(self, tmp_path, monkeypatch):
-        """Fixes first-screenful loss: launch is detached (-d), pipe-pane
-        started in the same command, attach happens as a separate call."""
+    def test_wrap_tmux_attached_launch(self, tmp_path, monkeypatch):
+        """Launch is ATTACHED (no -d): tmux blocks until ssh exits, so
+        connect_to_session's single subprocess.run is the whole session.
+        (Detached + attach-later proved unreliable: tmux 3.2+ reaps an
+        unattached destroy-unattached session before attach can run.)"""
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         monkeypatch.delenv("TMUX", raising=False)
         argv, _ = build_ssh_command(
             "s", {"HostName": "h"}, reg_path=tmp_path / "r.reg", tmux=True,
         )
         assert argv[:2] == ["tmux", "new-session"]
-        assert "-d" in argv
-        # pipe-pane comes right after the launch command's ';'
+        assert "-d" not in argv
+        # pipe-pane targets the session by plain name
         pp_idx = argv.index("pipe-pane")
-        assert argv[pp_idx + 1] == "-t"
+        assert argv[pp_idx + 2] == "s"
         # and the argv contains NO shell (no 'sh','-c')
         assert "sh" not in argv[:3]
 
     def test_outside_tmux_names_session_explicitly(self, tmp_path, monkeypatch):
         """Regression: outside tmux, `new-session -n NAME` names only the
-        window (tmux auto-names the session '0'), so attach-session -t NAME
-        failed with 'can't find session'. Must pass -s NAME too, and
-        set-option/pipe-pane must use plain-name targets (the '=' exact
-        prefix is session-match syntax those commands reject)."""
+        window (tmux auto-names the session '0'). Session must be named
+        with -s NAME; set-option/pipe-pane use plain-name targets (the
+        '=' exact-match prefix is rejected by those commands and aborts
+        the ';' chain before pipe-pane starts)."""
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         monkeypatch.delenv("TMUX", raising=False)
         argv, _ = build_ssh_command(
@@ -880,43 +882,6 @@ class TestMoshAndExtraArgs:
         assert "set-option" not in argv  # window needs no destroy-unattached
         pp_idx = argv.index("pipe-pane")
         assert argv[pp_idx + 2] == "s"
-
-    def test_attach_tmux_session_outside(self, monkeypatch, tmp_path):
-        import subprocess as sp
-        launches = []
-        monkeypatch.setattr(
-            sp, "run",
-            lambda argv, **k: launches.append(argv)
-            or sp.CompletedProcess(argv, 0),
-        )
-        from putty import attach_tmux_session
-        rc = attach_tmux_session(
-            ["tmux", "new-session", "-d", "-s", "My_Session", "-n", "My_Session",
-             "ssh h", ";", "pipe-pane"])
-        assert rc == 0
-        target = launches[-1]
-        assert target[:2] == ["tmux", "attach-session"]
-        assert target[3] == "=My_Session"  # exact-name session target
-
-    def test_attach_tmux_session_inside(self, monkeypatch, tmp_path):
-        import subprocess as sp
-        launches = []
-        monkeypatch.setattr(
-            sp, "run",
-            lambda argv, **k: launches.append(argv)
-            or sp.CompletedProcess(argv, 0),
-        )
-        monkeypatch.setenv("TMUX", "/tmp/tmux-0/default,0,0")
-        from putty import attach_tmux_session
-        rc = attach_tmux_session(
-            ["tmux", "new-window", "-d", "-n", "w", "ssh h", ";", "pipe-pane"])
-        assert rc == 0
-        assert launches[-1][:3] == ["tmux", "switch-client", "-t"]
-        assert launches[-1][3] == ":w"  # window target on current session
-
-    def test_attach_no_name_noop(self):
-        from putty import attach_tmux_session
-        assert attach_tmux_session(["tmux", "new-session"]) == 0
 
     def test_mosh_basic(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))

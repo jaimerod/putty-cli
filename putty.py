@@ -182,14 +182,11 @@ def connect_to_session(
         return 0
 
     try:
-        # argv built internally by shlex.quote; no user shell text
+        # argv built internally by shlex.quote; no user shell text.
+        # No phase-2 attach: the tmux launch itself is attached (blocks
+        # until ssh exits), and pipe-pane runs in the same command chain.
         result = subprocess.run(cmd, check=False)  # nosec B603
         exit_code = result.returncode
-        # Phase 2: attach to the (already logged, already started) session.
-        # The launch was detached so pipe-pane was running before attach -
-        # the first screenful of output is never lost from the log.
-        if exit_code == 0 and looks_like_tmux_argv(cmd):
-            exit_code = attach_tmux_session(cmd)
     except FileNotFoundError:
         missing = "tmux" if tmux_used else "ssh"
         print(f"Error: '{missing}' not found.", file=sys.stderr)
@@ -298,42 +295,6 @@ def pick_session_interactive(
         selected_display = menu_items[selected_index]
 
     return display_to_name[selected_display]
-
-
-def looks_like_tmux_argv(cmd: List[str]) -> bool:
-    """True if cmd is a detached tmux launch built by _wrap_tmux."""
-    return (
-        len(cmd) > 1 and cmd[0] == "tmux"
-        and cmd[1] in ("new-window", "new-session")
-        and "-d" in cmd
-    )
-
-
-def attach_tmux_session(launch_argv: List[str]) -> int:
-    """Phase 2 after a detached tmux launch: attach to the session/window.
-
-    Outside tmux the launch created session NAME (-s NAME); attach to it.
-    Inside tmux the launch created window NAME (-n NAME); switch-client to
-    it (tmux >= 3.1 accepts '=session:window' targets; we target the
-    window of our current session via the name).
-
-    Returns the attach exit code; 0 when attachment isn't applicable."""
-    try:
-        name = launch_argv[launch_argv.index("-n") + 1]
-    except (ValueError, IndexError):
-        return 0
-    if os.environ.get("TMUX"):
-        # window target: current session's window named NAME
-        argv = ["tmux", "switch-client", "-t", f":{name}"]
-    else:
-        # session target: exact-name match with '=' prefix
-        argv = ["tmux", "attach-session", "-t", f"={name}"]
-    try:
-        # argv from our own builder; 'tmux' partial path is conventional
-        result = subprocess.run(argv, check=False)  # nosec B603, B607
-        return result.returncode
-    except FileNotFoundError:
-        return 0
 
 
 ACTION_CONNECT = "Connect"

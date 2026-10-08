@@ -191,16 +191,15 @@ def _wrap_tmux(
     tmux accepts commands separated by ';' as plain argv tokens, so no
     shell is invoked - injection-safe by construction.
 
-    Outside tmux: `new-session -d -s NAME -n WNAME` creates a session we
-    explicitly name (auto-naming would make attach impossible to target)
-    plus destroy-unattached so it vanishes on detach. putty.py attaches
-    afterwards by that exact name.
+    The session/window is created ATTACHED (no -d): the tmux client blocks
+    until the pane command exits, so putty.py's subprocess.run waits for
+    the ssh session naturally. (Creating detached + attaching later is
+    unreliable on tmux 3.2+: an unattached session with
+    destroy-unattached is reaped before the attach can run.)
 
-    Inside tmux: `new-window -d -n WNAME` opens a window named WNAME;
-    pipe-pane then targets that window.
-
-    Launch is detached (-d) with pipe-pane started immediately, so the
-    log captures the session from the first screenful.
+    Outside tmux: new-session, explicitly named (-s), with
+    destroy-unattached set so a manual detach cleans it up.
+    Inside tmux: new-window.
     """
     timestamp = time.strftime("%Y-%m-%d_%H%M")
     log_dir = os.environ.get("PUTTY_LOG_DIR")
@@ -216,13 +215,11 @@ def _wrap_tmux(
     name = safe_name(session_name)
     argv = ["tmux"]
     if in_tmux:
-        argv += ["new-window", "-d", "-n", name,
+        argv += ["new-window", "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";"]
     else:
-        argv += ["new-session", "-d", "-s", name, "-n", name,
+        argv += ["new-session", "-s", name, "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";",
                  "set-option", "-t", name, "destroy-unattached", "on", ";"]
-    # plain-name targets; the '=' exact-match prefix is accepted by
-    # session-targeting commands (has-session/attach) but not set-option
     argv += ["pipe-pane", "-t", name, "-o", f"cat >> {shlex.quote(log_file)}"]
     return argv
