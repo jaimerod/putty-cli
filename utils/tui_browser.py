@@ -195,6 +195,7 @@ class SessionBrowser(App[int]):
         self.group_by_tag = group_by_tag
         self.connect_callback = connect_callback  # runs after suspend()
         self.selected_name: Optional[str] = None
+        self._last_cursor: tuple[int, int] = (0, 0)
         self.rows: List[SessionRow] = []
         self.filtered_rows: List[SessionRow] = []
         self.status_message = ""
@@ -330,6 +331,7 @@ class SessionBrowser(App[int]):
             return
         if event.button == 3:
             event.stop()
+            self._last_cursor = (event.screen_x, event.screen_y)
             self.selected_name = name
             try:
                 lv = self.query_one("#sessions", ListView)
@@ -340,8 +342,8 @@ class SessionBrowser(App[int]):
             await self.run_action_with_modal(name)
 
     async def run_action_with_modal(self, session_name: str) -> None:
-        from .tui_actions import SessionActionModal
-        modal = SessionActionModal(unquote_display(session_name))
+        from .tui_actions import SessionActionMenu
+        modal = SessionActionMenu(unquote_display(session_name), self._last_cursor)
         await app_push_screen(self, modal, session_name)
 
     async def _run_chosen_action(self, action: Optional[str], name: str) -> None:
@@ -374,8 +376,8 @@ class SessionBrowser(App[int]):
         """Disable the priority Enter binding while a modal/log screen is
         active so the modal's own widgets and keys keep working."""
         if action == "connect":
-            from .tui_actions import LogViewerScreen, SessionActionModal
-            return type(self.screen) not in (SessionActionModal, LogViewerScreen)
+            from .tui_actions import LogViewerScreen, SessionActionMenu
+            return type(self.screen) not in (SessionActionMenu, LogViewerScreen)
         return True
 
     async def action_quit(self) -> None:

@@ -66,7 +66,10 @@ putty-cli --reg FILE           use a specific .reg file
 - session list with tag groups and recents metadata (`2h ago ✗`)
 - **live preview pane**: the ssh command for the highlighted session,
   built without side effects (no puttygen run, no logs written)
-- keys: Enter connect · p ping · y copy command · l logs · q quit
+- keys: Enter connect · single click select · double click connect ·
+  right-click context menu · p ping · y copy command · l logs · q quit
+- right-click opens a cursor-positioned context menu (arrows navigate,
+  Enter executes, Esc or clicking outside closes)
 - connect suspends the UI and hands the terminal to tmux; the browser
   redraws when the session ends
 - Copy uses the tmux buffer when inside tmux, else OSC52

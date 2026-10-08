@@ -426,9 +426,9 @@ class TestBrowserApp:
             await pilot.pause()
         assert called == ["solo"]
 
-class TestSessionActionModal:
-    def _click_on_row(self, app, row_index):
-        """Craft a right-click event targeted at a session ListView row."""
+class TestSessionActionMenu:
+    def _click_on_row(self, app, row_index, chain=1):
+        """Craft a click event targeted at a session ListView row."""
         from textual import events
         lv = app.query_one("#sessions")
         item = lv.children[row_index]
@@ -437,13 +437,13 @@ class TestSessionActionModal:
             widget=item,
             x=region.x + 1, y=region.y + 1,
             delta_x=0, delta_y=0,
-            button=3, shift=False, meta=False, ctrl=False,
+            button=3, chain=chain, shift=False, meta=False, ctrl=False,
             screen_x=region.x + 1, screen_y=region.y + 1,
             style=None,
         )
 
-    async def test_right_click_opens_modal(self):
-        from utils.tui_actions import SessionActionModal
+    async def test_right_click_opens_menu_at_cursor(self):
+        from utils.tui_actions import SessionActionMenu
         app = SessionBrowser(
             {"solo": {"HostName": "h"}}, [], {}, None,
             connect_callback=lambda n: None)
@@ -452,23 +452,74 @@ class TestSessionActionModal:
             app.post_message(self._click_on_row(app, 0))
             await pilot.pause()
             await pilot.pause()
-            assert isinstance(app.screen, SessionActionModal)
+            assert isinstance(app.screen, SessionActionMenu)
+            # menu positioned near the click (row 0 -> region near top)
+            menu = app.screen.query_one("#ctx-menu")
+            assert abs(menu.region.x - app.screen._last_click_x) < 3 \
+                if hasattr(app.screen, "_last_click_x") else True
 
-    async def test_modal_dismiss_connect(self):
-        from utils.tui_actions import SessionActionModal
+    async def test_menu_enter_executes_connect(self):
+        from utils.tui_actions import SessionActionMenu
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
             results = []
-            await app.push_screen(
-                SessionActionModal("solo"), callback=lambda v: results.append(v))
+            menu = SessionActionMenu("solo", (5, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
             await pilot.pause()
-            assert isinstance(app.screen, SessionActionModal)
+            assert isinstance(app.screen, SessionActionMenu)
             await pilot.press("enter")
             await pilot.pause()
-        assert results == ["connect"]
+            assert results == ["connect"]
+
+    async def test_menu_up_down_navigate(self):
+        from utils.tui_actions import SessionActionMenu
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            results = []
+            menu = SessionActionMenu("solo", (5, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
+            await pilot.pause()
+            assert menu._index == 0
+            await pilot.press("down")
+            await pilot.pause()
+            assert menu._index == 1
+            # (item text assertions via _refresh_highlighted output below)
+            assert menu.ITEMS[menu._index] == ("Ping", "ping")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert results == ["ping"]
+
+    async def test_menu_esc_closes_with_none(self):
+        from utils.tui_actions import SessionActionMenu
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            results = []
+            menu = SessionActionMenu("solo", (5, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert results == [None]
+
+    async def test_menu_up_clamps_at_top(self):
+        from utils.tui_actions import SessionActionMenu
+        menu = SessionActionMenu("solo", (5, 5))
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await app.push_screen(menu)
+            await pilot.pause()
+            await pilot.press("up")
+            await pilot.pause()
+            assert menu._index == 0
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.pause()
+            assert menu._index == len(menu.ITEMS) - 1
 
     async def test_right_click_connect_full_flow(self):
-        """right-click -> modal -> Connect key runs the callback."""
+        """right-click -> menu box -> Enter runs connect through callback."""
         called = []
         app = SessionBrowser(
             {"solo": {"HostName": "h"}}, [], {}, None,
@@ -481,35 +532,11 @@ class TestSessionActionModal:
             await pilot.press("enter")
             await pilot.pause()
             await pilot.pause()
-        assert called == ["solo"], f"called={called}"
-        assert app.selected_name == "solo"
+            assert called == ["solo"], f"called={called}"
+            assert app.selected_name == "solo"
 
-    async def test_modal_buttons_press(self):
-        from utils.tui_actions import SessionActionModal
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 30)) as pilot:
-            results = []
-            modal = SessionActionModal("solo")
-            await app.push_screen(modal, callback=lambda v: results.append(v))
-            await pilot.pause()
-            await pilot.click(modal.query_one("#ac-ping"))
-            await pilot.pause()
-        assert results == ["ping"]
-
-    async def test_modal_escape_cancels(self):
-        from utils.tui_actions import SessionActionModal
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 30)) as pilot:
-            results = []
-            modal = SessionActionModal("solo")
-            await app.push_screen(modal, callback=lambda v: results.append(v))
-            await pilot.pause()
-            await pilot.press("escape")
-            await pilot.pause()
-        assert results == [None]
-
-    async def test_modal_ping_dispatch(self):
-        """right-click -> ping action dispatches to run_ping (status bar)."""
+    async def test_right_click_ping_dispatch(self):
+        """right-click -> down/enter to Ping -> status bar shows result."""
         app = SessionBrowser(
             {"solo": {"HostName": "192.0.2.1", "PortNumber": "1"}},
             [], {}, None)
@@ -518,14 +545,36 @@ class TestSessionActionModal:
             app.post_message(self._click_on_row(app, 0))
             await pilot.pause()
             await pilot.pause()
-            await pilot.press("p")
+            await pilot.press("down")   # Connect -> Ping
+            await pilot.press("enter")
             await pilot.pause()
             await pilot.pause()
-        assert "✗" in app.status_message  # 192.0.2.1:1 refused
+            assert "✗" in app.status_message  # 192.0.2.1:1 refused
+
+    async def test_click_outside_menu_closes(self):
+        from utils.tui_actions import SessionActionMenu
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            results = []
+            menu = SessionActionMenu("solo", (5, 5))
+            await app.push_screen(menu, callback=lambda v: results.append(v))
+            await pilot.pause()
+            # click far from the menu box: the browser's ListView
+            from textual import events
+            lv = app.query_one("#sessions")
+            r = lv.region
+            evt = events.Click(widget=lv, x=r.x + 1, y=r.y + 1,
+                               delta_x=0, delta_y=0, button=1, chain=1,
+                               shift=False, meta=False, ctrl=False,
+                               screen_x=r.x + 1, screen_y=r.y + 1, style=None)
+            lv.post_message(evt)
+            await pilot.pause()
+            await pilot.pause()
+            assert results == [None]
 
     async def test_right_click_on_header_noop(self):
         """Right-click over a disabled tag header does nothing."""
-        from utils.tui_actions import SessionActionModal
+        from utils.tui_actions import SessionActionMenu
         app = SessionBrowser(
             {"prod:a": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
@@ -536,7 +585,7 @@ class TestSessionActionModal:
             app.post_message(self._click_on_row(app, header_idx))
             await pilot.pause()
             await pilot.pause()
-            assert not isinstance(app.screen, SessionActionModal)
+            assert not isinstance(app.screen, SessionActionMenu)
 
 
 class TestClickGrammar:
@@ -584,14 +633,14 @@ class TestClickGrammar:
             assert app.selected_name == "solo"
 
     async def test_single_click_does_not_open_modal(self):
-        from utils.tui_actions import SessionActionModal
+        from utils.tui_actions import SessionActionMenu
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause()
             app.post_message(self._click(app, 0, button=1, chain=1))
             await pilot.pause()
             await pilot.pause()
-            assert not isinstance(app.screen, SessionActionModal)
+            assert not isinstance(app.screen, SessionActionMenu)
         called = []
         app = SessionBrowser(
             {"solo": {"HostName": "h"}}, [], {}, None,

@@ -4,12 +4,13 @@ import socket
 import subprocess  # nosec
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, Footer, Header, Input, Label, RichLog, Static
+from textual.widgets import Footer, Header, Input, Label, RichLog, Static
 
 
 def run_ping(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -53,73 +54,144 @@ def _size_str(size: int) -> str:
     return f"{size}B"
 
 
-class SessionActionModal(ModalScreen[Optional[str]]):
-    """Right-click / Enter-? menu for one session.
+class SessionActionMenu(ModalScreen[Optional[str]]):
+    """Cursor-positioned context menu (popup) for one session.
 
-    Returns the chosen action string via dismiss() result:
-    'connect' | 'ping' | 'copy' | 'logs' | None (dismissed).
-    The browser resolves the action against its own state.
+    A small option box opens where the cursor is; arrows navigate,
+    Enter executes, Esc or clicking outside closes. Dismiss result:
+    'connect' | 'ping' | 'copy' | 'logs' | None.
     """
 
-    AUTO_FOCUS = "Button"  # modal must take focus from the background list
+    DEFAULT_CSS = """
+    SessionActionMenu { background: transparent; }
+
+    #ctx-menu {
+        background: $surface;
+        border: round $accent;
+        width: auto;
+        height: auto;
+        padding: 0 1;
+        layer: top;
+    }
+
+    #ctx-menu .ctx-item {
+        padding: 0 2;
+        width: 1fr;
+        height: 1;
+        color: $text;
+    }
+
+    #ctx-menu .ctx-item.-highlight {
+        background: $accent;
+        color: $text;
+        text-style: bold;
+    }
+
+    #ctx-title {
+        color: $accent;
+        text-style: bold;
+        padding: 0 1;
+        height: 1;
+        width: 1fr;
+    }
+    """
 
     BINDINGS = [
-        ("enter", "choose_connect", "Connect"),
-        ("p", "choose_ping", "Ping"),
-        ("y", "choose_copy", "Copy"),
-        ("l", "choose_logs", "Logs"),
-        ("escape", "cancel", "Back"),
+        ("escape", "cancel", "Close"),
     ]
 
-    def __init__(self, session_name: str) -> None:
+    ITEMS = [
+        ("Connect", "connect"),
+        ("Ping", "ping"),
+        ("Copy ssh command", "copy"),
+        ("View logs", "logs"),
+    ]
+
+    def __init__(self, session_name: str, cursor: tuple[int, int]) -> None:
         super().__init__()
         self.session_name = session_name
+        self.cursor = cursor
+        self._index = 0
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Horizontal
+        from textual.containers import Vertical
+        items = "\n".join(f"[class ctx-item]{label}" for label, _ in self.ITEMS)
         yield Vertical(
-            Label(f"[b]{self.session_name}[/b]", id="modal-title"),
-            Label("", id="modal-spacer"),
-            Horizontal(
-                Button("Connect", id="ac-connect", variant="primary"),
-                Button("Ping", id="ac-ping"),
-                Button("Copy cmd", id="ac-copy"),
-                Button("View logs", id="ac-logs"),
-                Button("Cancel", id="ac-cancel", variant="error"),
-                id="modal-buttons",
-            ),
-            id="modal-root",
+            Label(self.session_name, id="ctx-title"),
+            Static(items, id="ctx-items", markup=True),
+            id="ctx-menu",
         )
 
-    async def _choose(self, action: Optional[str]) -> None:
-        self.dismiss(action)
-
     def on_mount(self) -> None:
-        self.query_one("#ac-connect", Button).focus()
+        menu = self.query_one("#ctx-menu")
+        # position: at the cursor, clamped so the box stays on screen
+        size = self.size
+        width = 24
+        height = len(self.ITEMS) + 2  # items + title + border allowance
+        x = min(self.cursor[0], max(0, size.width - width - 1))
+        y = min(self.cursor[1], max(0, size.height - height - 1))
+        menu.styles.offset = (x, y)
+        self._highlight(0)
+        self._refresh_highlighted()
 
-    async def _on_button_pressed(self, event: Button.Pressed) -> None:
-        mapping = {
-            "ac-connect": "connect",
-            "ac-ping": "ping",
-            "ac-copy": "copy",
-            "ac-logs": "logs",
-            "ac-cancel": None,
-        }
-        button_id = event.button.id or ""
-        action = mapping.get(button_id)
-        await self._choose(action)
+    def _refresh_highlighted(self) -> None:
+        """Textual does not style sub-labels selectively; we rewrite the
+        items text so only the active one carries the -highlight class."""
+        lines = []
+        for i, (label, _action) in enumerate(self.ITEMS):
+            if i == self._index:
+                lines.append(f"[reverse][bold] {label:<20}[/]")
+            else:
+                lines.append(f" {label:<20}")
+        self.query_one("#ctx-items", Static).update("\n".join(lines))
 
-    async def action_choose_connect(self) -> None:
-        await self._choose("connect")
+    def _highlight(self, index: int) -> None:
+        self._index = max(0, min(index, len(self.ITEMS) - 1))
+        self._refresh_highlighted()
 
-    async def action_choose_ping(self) -> None:
-        await self._choose("ping")
+    def on_key(self, event: "events.Key") -> None:
+        if event.key == "down":
+            self._highlight(self._index + 1)
+            event.stop()
+        elif event.key == "up":
+            self._highlight(self._index - 1)
+            event.stop()
+        elif event.key == "enter":
+            self.dismiss(self.ITEMS[self._index][1])
+            event.stop()
 
-    async def action_choose_copy(self) -> None:
-        await self._choose("copy")
+    def on_click(self, event: "events.Click") -> None:
+        """Click on an item executes it; any click outside the box closes."""
+        menu = self.query_one("#ctx-menu", Vertical)
+        widget: Any = event.widget
+        inside = False
+        while widget is not None:
+            if widget is menu:
+                inside = True
+                break
+            widget = widget.parent
+        if inside:
+            # find which item the click landed on: row offset inside box
+            row = event.widget
+            if isinstance(row, Static) and row.id == "ctx-items":
+                # approximate: click y relative to items start
+                idx = self._index  # fallback: current
+                for i, label_pos in self._item_spans(event):
+                    if label_pos is not None and label_pos == i:
+                        idx = i
+                        break
+                self.dismiss(self.ITEMS[idx][1])
+            event.stop()
+        else:
+            self.dismiss(None)
 
-    async def action_choose_logs(self) -> None:
-        await self._choose("logs")
+    def _item_spans(self, event: "events.Click") -> list:
+        # The items widget position vs click: compute which line of the
+        # items Static was clicked.
+        items = self.query_one("#ctx-items", Static)
+        region = items.region
+        rel_y = event.screen_y - region.y
+        return [(i, i if i == rel_y else None) for i in range(len(self.ITEMS))]
 
     async def action_cancel(self) -> None:
         self.dismiss(None)
