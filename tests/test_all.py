@@ -1,5 +1,4 @@
 import contextlib
-import importlib
 import io
 import shlex
 import shutil
@@ -1313,7 +1312,6 @@ class TestInteractiveFlows:
         assert out.getvalue().count("Selection cancelled") == 1
 
     def test_action_connect_runs_and_records(self, monkeypatch, tmp_path):
-        import os
         import subprocess as sp
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
@@ -1331,7 +1329,6 @@ class TestInteractiveFlows:
         assert recent.exists()
 
     def test_action_ping_invoked(self, monkeypatch, tmp_path):
-        import subprocess as sp
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         calls = []
