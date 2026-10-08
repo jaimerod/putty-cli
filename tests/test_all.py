@@ -1,4 +1,5 @@
 import contextlib
+import importlib
 import io
 import shlex
 import shutil
@@ -1200,6 +1201,201 @@ class TestPpkPathResolution:
 # ── Recents metadata + display suffixes (items 8+9) ──────────────────────────
 
 class TestRecentsMetadata:
+    def test_parse_line_edge_cases(self):
+        from utils.recent_sessions_util import _parse_line, _serialize
+        assert _parse_line("") is None
+        assert _parse_line("   ") is None
+        # leading-tab lines strip to a valid plain name (documented behavior)
+        assert _parse_line("\tno_name") == {"name": "no_name", "ts": None, "exit": None}
+        e = _parse_line("name")
+        assert e == {"name": "name", "ts": None, "exit": None}
+        e = _parse_line("name\tbadts")
+        assert e["ts"] is None                      # malformed ts -> None
+        e = _parse_line("name\t123\tbadexit")
+        assert e["ts"] == 123 and e["exit"] is None  # malformed exit -> None
+        e = _parse_line("name\t123\t255")
+        assert e == {"name": "name", "ts": 123, "exit": 255}
+        assert _serialize(e) == "name\t123\t255"
+        assert _serialize({"name": "x"}) == "x"
+
+    def test_load_recent_entries_missing_and_unreadable(self, tmp_path, monkeypatch):
+        from utils.recent_sessions_util import load_recent_entries
+        assert load_recent_entries(tmp_path / "nope") == {}
+        f = tmp_path / "recent.txt"
+        f.write_bytes(b"\xff\xfe\xff")
+        assert load_recent_entries(f) == {}
+
+    def test_load_recent_entries_dedupes_first_wins(self, tmp_path):
+        from utils.recent_sessions_util import load_recent_entries
+        f = tmp_path / "recent.txt"
+        f.write_text("a\t111\t0\na\t222\t3\n", encoding="utf-8")
+        entries = load_recent_entries(f)
+        assert entries["a"]["ts"] == 111  # newest (first) wins
+
+    def test_update_unwritable_is_silent(self, tmp_path, monkeypatch):
+        from utils.recent_sessions_util import update_recent_sessions
+        f = tmp_path / "recent.txt"
+        f.write_text("seed\n", encoding="utf-8")
+        builtins_target = "builtins.open"
+
+        def broken_open(*a, **k):
+            raise OSError("denied")
+
+        monkeypatch.setattr(builtins_target, broken_open)
+        update_recent_sessions(f, "x")  # must not raise
+
+    def test_update_stale_temp_cleanup(self, tmp_path):
+        """If os.replace works, no temp lingers; failure path tolerates."""
+        f = tmp_path / "recent.txt"
+        update_recent_sessions(f, "x")
+        leftovers = list(tmp_path.glob(".putty_recent_*"))
+        assert not leftovers
+
+    def test_mixed_format_file(self, tmp_path):
+        """Legacy names + TSV lines coexist."""
+        f = tmp_path / "recent.txt"
+        f.write_text("oldplain\nnew\t1700000000\t0\n", encoding="utf-8")
+        entries = load_recent_entries(f)
+        assert entries["oldplain"]["ts"] is None
+        assert entries["new"]["ts"] == 1700000000
+
+
+# ── Interactive main() flows (coverage: pick/action/missing-binary paths) ────
+
+class TestInteractiveFlows:
+    def _fake_menu(self, monkeypatch, pick_sequence):
+        """Replace putty.TerminalMenu with a scripted picker."""
+        seq = iter(pick_sequence)
+
+        class FakeMenu:
+            def __init__(self, *a, **k):
+                pass
+
+            def show(self):
+                try:
+                    return next(seq)
+                except StopIteration:
+                    return None
+
+        monkeypatch.setattr(putty, "TerminalMenu", FakeMenu)
+
+    def test_menu_cancel_exits_zero(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        self._fake_menu(monkeypatch, [None])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = putty.main([])
+        assert rc == 0
+        assert "cancelled" in out.getvalue()
+
+    def test_separator_pick_reprompts_then_cancel(self, monkeypatch, tmp_path, capsys):
+        """Choosing a separator row re-shows the menu (legacy loop path)."""
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # session list: [recent-header, ..., separator, items...]; pick sep idx 6
+        self._fake_menu(monkeypatch, [6, None])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = putty.main([])
+        assert rc == 0
+
+    def test_action_back_returns_to_sessions(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # first pick: session prod-db (index 5 in default file), action=Back,
+        # then cancel session list
+        self._fake_menu(monkeypatch, [3, None, None])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = putty.main([])
+        assert rc == 0
+        assert out.getvalue().count("Selection cancelled") == 1
+
+    def test_action_connect_runs_and_records(self, monkeypatch, tmp_path):
+        import os
+        import subprocess as sp
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/tmux" if n == "tmux" else None)
+        monkeypatch.setattr(
+            sp, "run", lambda argv, **k: sp.CompletedProcess(argv, 0))
+        # pick prod-db, action Connect (index 0)
+        self._fake_menu(monkeypatch, [3, 0])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = putty.main([])
+        assert rc == 0
+        recent = tmp_path / ".putty_recent_sessions"
+        assert recent.exists()
+
+    def test_action_ping_invoked(self, monkeypatch, tmp_path):
+        import subprocess as sp
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        calls = []
+        monkeypatch.setattr(putty, "ping_host", lambda h, p="22": calls.append((h, p)) or 0)
+        # pick prod-db, action=Ping (index 2)
+        self._fake_menu(monkeypatch, [3, 2])
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = putty.main([])
+        assert rc == 0
+        assert calls and calls[0][0] == "web1.example.com"
+
+    def test_action_copy_invoked(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # pick prod-db, action=Copy (index 1)
+        self._fake_menu(monkeypatch, [3, 1])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = putty.main([])
+        assert rc == 0
+        assert "Copied" in out.getvalue()
+
+    def test_import_error_message(self, monkeypatch, capsys):
+        """simple-term-menu missing -> friendly venv instructions."""
+        # putty raises SystemExit(1) at import time with guidance; simulate
+        # by importing a fresh module alias with the dependency blocked.
+        import builtins
+        import importlib.util
+        real_import = builtins.__import__
+
+        def fake_import(name, *a, **k):
+            if name == "simple_term_menu":
+                raise ImportError(name)
+            return real_import(name, *a, **k)
+
+        spec = importlib.util.spec_from_file_location(
+            "putty_fresh", Path(__file__).resolve().parent.parent / "putty.py")
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        with pytest.raises(SystemExit) as exc:
+            spec.loader.exec_module(module)  # type: ignore[union-attr]
+        assert exc.value.code == 1
+        assert "simple-term-menu not installed" in capsys.readouterr().err
+
+    def test_empty_reg_clear_error(self, monkeypatch, tmp_path, capsys):
+        reg = tmp_path / "empty.reg"
+        reg.write_text("nothing here\n", encoding="utf-8")
+        monkeypatch.setenv("PUTTY_REG_PATH", str(reg))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        rc = putty.main(["--connect", "x"])
+        assert rc == 1
+        assert "no session named" in capsys.readouterr().err.lower()
+
+    def test_all_archived_reg_error(self, monkeypatch, tmp_path, capsys):
+        reg = tmp_path / "reg.reg"
+        reg.write_text(
+            '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\xxx-archived]\n'
+            '"HostName"="h"\n', encoding="utf-8")
+        monkeypatch.setenv("PUTTY_REG_PATH", str(reg))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        rc = putty.main(["--connect", "x"])
+        assert rc == 1
+
     def test_format_relative_time(self, monkeypatch):
         import time as t
 
