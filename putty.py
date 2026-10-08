@@ -332,17 +332,27 @@ def copy_to_clipboard(text: str) -> bool:
         return False
 
 
-def ping_host(host: str, port: str = "22") -> int:
-    """TCP-level reachability probe (works where ICMP ping is blocked)."""
+def ping_probe(host: str, port: str = "22") -> Tuple[bool, str]:
+    """TCP-level reachability probe (works where ICMP ping is blocked).
+
+    Returns (reachable, message) - message is human-readable either way."""
     import socket
     host = host.split("@")[-1]
     try:
         with socket.create_connection((host, int(port)), timeout=3):
-            print(f"  ✓ {host}:{port} reachable")
-            return 0
+            return True, f"{host}:{port} reachable"
     except OSError as e:
-        print(f"  ✗ {host}:{port} unreachable ({e})", file=sys.stderr)
-        return 1
+        return False, f"{host}:{port} unreachable ({e})"
+
+
+def ping_host(host: str, port: str = "22") -> int:
+    """CLI wrapper around ping_probe; prints the result."""
+    ok, msg = ping_probe(host, port)
+    if ok:
+        print(f"  ✓ {msg}")
+        return 0
+    print(f"  ✗ {msg}", file=sys.stderr)
+    return 1
 
 
 def handle_action(
