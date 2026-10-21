@@ -139,9 +139,15 @@ role (frames, captions, menus, inputs, key bar, shadows) is one field.
 
 ## Logs
 
-Each connection pipes the session to a timestamped log in `PUTTY_LOG_DIR`.
+Each connection pipes the session to a timestamped log in
+`PUTTY_LOG_DIR` (default: the directory containing the `.reg` export —
+the same place `_wrap_tmux` writes, whether or not the env var is set).
 **Logs capture everything shown, including passwords you type.** Browse
-with `putty-cli --logs`.
+with `putty-cli --logs`, or in the TUI with `l` on a highlighted
+session: a FAR dialog shows the newest log for that session —
+scrollable (arrow keys / scrollbar), `/` focuses a live search filter
+that keeps only matching lines, `n`/`N` jump between matches with
+context, `Esc`/`q` closes.
 
 ## Development
 

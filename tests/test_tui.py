@@ -35,6 +35,59 @@ USABLE = {
 }
 
 
+class TestLogModal:
+    """l: FAR dialog (scroll + filter) reading the RIGHT log folder."""
+
+    async def test_l_reads_logs_next_to_reg_file(self, tmp_path, monkeypatch):
+        """Regression: connects write logs next to the .reg (the user's
+        OneDrive PuTTY dir); the viewer must look THERE by default."""
+        monkeypatch.delenv("PUTTY_LOG_DIR", raising=False)
+        log = tmp_path / "2026-10-21_0337-16gb_Linux_Server.log"
+        log.write_text("ssh -p 22 ok\nsession started\n", encoding="utf-8")
+        monkeypatch.delenv("TMUX", raising=False)
+        reg = tmp_path / "putty.reg"
+
+        from utils.tui_actions import LogModal
+        app = SessionBrowser({"16gb_Linux_Server": {"HostName": "h"}},
+                             [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            assert isinstance(app.screen, LogModal)
+            assert app.screen.log_path == log
+
+    async def test_log_modal_scrolls(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        log = logs_dir / "2026-10-21_0900-solo.log"
+        log.write_text(
+            "\n".join(f"line-{i:03d} padding" for i in range(200)) + "\n",
+            encoding="utf-8")
+        from utils.tui_actions import LogModal
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            assert isinstance(app.screen, LogModal)
+            scroll = app.screen.query_one("#log-view")
+            assert scroll.max_scroll_y >= 1       # the log overflows
+            # the browser's footer keybar stays put (dialog has its own)
+            assert "e Edit" in app.query_one("#keybar").bar_text()
+            for _ in range(3):
+                await pilot.press("down")
+            await pilot.pause()
+            assert scroll.scroll_offset.y > 0
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, LogModal)
+
+
 class TestTuiActions:
     def test_run_ping_reachable(self):
         import re
@@ -145,7 +198,7 @@ class TestTuiActions:
     async def test_l_opens_newest_session_log_directly(self, tmp_path, monkeypatch):
         """l = newest log for the highlighted session, straight into the
         searchable viewer (skips the chooser)."""
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
@@ -162,7 +215,7 @@ class TestTuiActions:
             await pilot.pause()
             await pilot.press("l")
             await pilot.pause()
-            assert isinstance(app.screen, LogViewerScreen)
+            assert isinstance(app.screen, LogModal)
             assert app.screen.log_path.name == "2026-10-07_1700-solo.log"
 
     async def test_l_no_logs_shows_status(self, tmp_path, monkeypatch):
@@ -173,8 +226,8 @@ class TestTuiActions:
             await pilot.press("l")  # no logs yet
             await pilot.pause()
             assert "no logs yet" in app.status_message
-            from utils.tui_actions import LogViewerScreen
-            assert not isinstance(app.screen, LogViewerScreen)
+            from utils.tui_actions import LogModal
+            assert not isinstance(app.screen, LogModal)
 
     async def test_l_no_session_highlighted(self):
         """l with no selectable row (e.g. empty list) -> status only."""
@@ -186,19 +239,19 @@ class TestTuiActions:
             assert "no session highlighted" in app.status_message
 
     async def test_esc_return_to_browser(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         log = tmp_path / "2026-10-07_1700-x.log"
         log.write_text("x\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            await app.push_screen(LogViewerScreen(log))
+            await app.push_screen(LogModal(log))
             await pilot.pause()
             await pilot.press("escape")
             await pilot.pause()
             assert app.screen is not None  # back to browser (no crash)
 
     async def test_unreadable_log_shows_error(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         p = tmp_path / "bad.log"
 
         def broken(self, *a, **k):
@@ -211,19 +264,19 @@ class TestTuiActions:
             pathlib.Path.read_text = monkeypatch_read  # type: ignore
             app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
             async with app.run_test(size=(110, 30)) as pilot:
-                await app.push_screen(LogViewerScreen(p))
+                await app.push_screen(LogModal(p))
                 await pilot.pause()
                 assert any("Cannot read" in ln for ln in app.screen.lines)  # type: ignore
         finally:
             pathlib.Path.read_text = orig  # type: ignore
 
     async def test_search_no_match_status(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         log = tmp_path / "a.log"
         log.write_text("one\ntwo\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(log)
+            screen = LogModal(log)
             await app.push_screen(screen)
             await pilot.pause()
             sb = screen.query_one("#log-search")
@@ -235,12 +288,12 @@ class TestTuiActions:
             assert "no matches" in status
 
     async def test_n_without_term_is_noop(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         log = tmp_path / "a.log"
         log.write_text("a\nb\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(log)
+            screen = LogModal(log)
             await app.push_screen(screen)
             await pilot.pause()
             before = len(screen.lines)
@@ -248,12 +301,12 @@ class TestTuiActions:
             assert len(screen.lines) == before
 
     async def test_prev_jump_wraps_negative(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         log = tmp_path / "a.log"
         log.write_text("HIT\nmid\nHIT\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(log)
+            screen = LogModal(log)
             await app.push_screen(screen)
             await pilot.pause()
             sb = screen.query_one("#log-search")
@@ -267,12 +320,12 @@ class TestTuiActions:
             assert "HIT" in " ".join(ctx)
 
     async def test_q_binding_dismisses(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         log = tmp_path / "a.log"
         log.write_text("q\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            await app.push_screen(LogViewerScreen(log))
+            await app.push_screen(LogModal(log))
             await pilot.pause()
             await pilot.press("q")
             await pilot.pause()
@@ -1315,12 +1368,12 @@ class TestContextKeyBar:
             assert "Find" in text  # restored after close
 
     async def test_log_viewer_keybar_reacts_to_search_focus(self, tmp_path):
-        from utils.tui_actions import LogViewerScreen
+        from utils.tui_actions import LogModal
         log = tmp_path / "a.log"
         log.write_text("one\ntwo\n", encoding="utf-8")
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
-            screen = LogViewerScreen(log)
+            screen = LogModal(log)
             await app.push_screen(screen)
             await pilot.pause()
             text = self._keybar_text(screen)

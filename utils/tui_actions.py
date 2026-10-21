@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen, Screen
+from textual.screen import ModalScreen
 from textual.widgets import Input, Label, RichLog, Static
 
 from .far_style import ACTIVE_PALETTE, FARKeyBar, KeyBarClicked
@@ -322,7 +322,6 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         )
 
     def compose(self) -> ComposeResult:
-        from textual.containers import VerticalScroll
         yield Static("", id="ctx-shadow", markup=True)
         with Vertical(id="ctx-menu"):
             yield Label(self.session_name, id="ctx-title")
@@ -867,17 +866,19 @@ class PingModal(ModalScreen[None]):
         self.dismiss(None)
 
 
-class LogViewerScreen(Screen):
-    """Searchable view of ONE session log file.
+class LogModal(ModalScreen[None]):
+    """FAR dialog for ONE session's log: scrollbar view + live filter.
 
-    '/' focuses the search box; the log filters to matching lines live.
-    n/N jump between matches; Esc returns.
+    Self-contained chrome (title / search field / log box / match
+    status / key bar) inside one centered dialog over the browser.
+    '/' focuses the search; typing filters to matching lines live;
+    n/N jump between matches (with context); Esc/q closes.
     """
 
     BINDINGS = [
         ("slash", "focus_search", "Search"),
-        ("escape", "dismiss", "Back"),
-        ("q", "dismiss", "Back"),
+        ("escape", "dismiss_dialog", "Back"),
+        ("q", "dismiss_dialog", "Back"),
         ("n", "next_match", "Next match"),
         ("N", "prev_match", "Prev match"),
     ]
@@ -891,19 +892,51 @@ class LogViewerScreen(Screen):
         self.match_index: int = -1
 
     DEFAULT_CSS = f"""
-    LogViewerScreen {{ background: {ACTIVE_PALETTE.bg}; }}
+    LogModal {{ background: transparent; }}
+
+    #log-shadow {{
+        position: absolute;
+        width: 0;
+        height: 0;
+        background: {ACTIVE_PALETTE.shadow};
+        color: {ACTIVE_PALETTE.dim};
+        layer: shadow;
+    }}
+
+    #log-box {{
+        background: {ACTIVE_PALETTE.bg};
+        border: round {ACTIVE_PALETTE.frame};
+        width: 96%;
+        height: 92%;
+        layout: vertical;
+        padding: 0;
+        layer: window;
+    }}
+
+    #log-title {{
+        dock: top;
+        color: {ACTIVE_PALETTE.title};
+        background: {ACTIVE_PALETTE.bg};
+        padding: 0 2;
+        height: 1;
+        text-style: bold;
+    }}
     #log-search {{
         dock: top;
-        background: {ACTIVE_PALETTE.bg};
-        color: {ACTIVE_PALETTE.title};
-        border: hidden;
+        background: {ACTIVE_PALETTE.popup_bg};
+        color: {ACTIVE_PALETTE.popup_text};
+        border: none;
         height: 1;
-        padding: 0 1;
+        padding: 0 2;
     }}
-    #log-scroll {{
+    #log-view {{
         border: solid {ACTIVE_PALETTE.frame};
         background: {ACTIVE_PALETTE.bg};
         margin: 1 2 1 2;
+        height: 1fr;
+        scrollbar-size-vertical: 2;
+        scrollbar-color: {ACTIVE_PALETTE.highlight_bg};
+        scrollbar-background: {ACTIVE_PALETTE.bg};
     }}
     #log-status {{
         dock: bottom;
@@ -912,25 +945,52 @@ class LogViewerScreen(Screen):
         color: {ACTIVE_PALETTE.highlight_bg};
         padding: 0 2;
     }}
-    RichLog {{ background: {ACTIVE_PALETTE.bg}; color: {ACTIVE_PALETTE.text}; }}
+    RichLog {{
+        background: {ACTIVE_PALETTE.bg};
+        color: {ACTIVE_PALETTE.text};
+    }}
+    #log-box FARKeyBar {{ dock: bottom; }}
     """
 
     def compose(self) -> ComposeResult:
-        yield Static(f" {self.log_path.name}", id="log-title")
-        yield Input(
-            placeholder="/ search this log (n next match, N previous)",
-            id="log-search",
-        )
-        with VerticalScroll(id="log-scroll"):
+        yield Static("", id="log-shadow", markup=False)
+        with Vertical(id="log-box"):
+            yield Static(f" {self.log_path.name}", id="log-title",
+                         markup=False)
+            yield Input(
+                placeholder="/ search this log (n next match, N previous)",
+                id="log-search",
+            )
             yield RichLog(id="log-view", wrap=False, highlight=False,
                           max_lines=self.max_lines)
-        yield Static("", id="log-status")
-        yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
+            yield Static("", id="log-status", markup=False)
+            yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
+
+    def on_mount(self) -> None:
+        # center the dialog: 96% x 92% leaves a border of the browser
+        size = self.size
+        self.query_one("#log-box", Vertical).styles.offset = (
+            max(0, int(size.width * 0.02)), max(0, int(size.height * 0.03)))
+        self._load()
+        self.query_one("#log-view", RichLog).focus()
+        self.call_after_refresh(self._sync_shadow)
+
+    def _sync_shadow(self) -> None:
+        try:
+            box = self.query_one("#log-box", Vertical)
+            shadow = self.query_one("#log-shadow", Static)
+        except Exception:  # noqa: BLE001 - widgets not mounted yet
+            return
+        _sync_far_shadow(box, shadow, self._underlying_screen)
+
+    @property
+    def _underlying_screen(self) -> Any:
+        return underlying_browser_screen(self)
 
     KEYBAR_SCROLL = [
         ("/", "Search", "focus_search"), ("n", "Next", "next_match"),
         ("N", "Prev", "prev_match"),
-        ("Esc", "Back", "dismiss"), ("q", "Back", "dismiss"),
+        ("Esc", "Back", "dismiss_dialog"), ("q", "Back", "dismiss_dialog"),
     ]
     KEYBAR_SEARCH = [
         ("Enter", "Apply", None), ("Esc", "Done", None),
@@ -963,10 +1023,6 @@ class LogViewerScreen(Screen):
         except Exception:  # nosec B110 - not mounted yet
             pass
 
-    def on_mount(self) -> None:
-        self._load()
-        self.query_one("#log-scroll", VerticalScroll).focus()
-
     def _load(self) -> None:
         try:
             text = self.log_path.read_text(errors="replace")
@@ -985,13 +1041,13 @@ class LogViewerScreen(Screen):
 
     def _update_status(self) -> None:
         shown = len(self.lines)
-        msg = f"{self.log_path.name}  │  {shown} lines"
+        msg = f"{self.log_path.name}  |  {shown} lines"
         if self.match_positions:
-            msg += (f"  │  match {self.match_index + 1}/"
+            msg += (f"  |  match {self.match_index + 1}/"
                     f"{len(self.match_positions)}")
         elif self.match_positions == [] and \
                 self.query_one("#log-search", Input).value:
-            msg += "  │  no matches"
+            msg += "  |  no matches"
         self.query_one("#log-status", Static).update(msg)
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -1005,7 +1061,8 @@ class LogViewerScreen(Screen):
             self._write_lines(self.lines)
         else:
             self.match_positions = [
-                i for i, line in enumerate(self.lines) if term.lower() in line.lower()
+                i for i, line in enumerate(self.lines)
+                if term.lower() in line.lower()
             ]
             self._write_lines([
                 self._mark(i, line) for i, line in enumerate(self.lines)
@@ -1047,7 +1104,6 @@ class LogViewerScreen(Screen):
         self.query_one("#log-search", Input).value = ""
         self._write_lines(self._match_context(target))
         self._update_status()
-        self._update_status()
 
     def _match_context(self, center: int, radius: int = 10) -> List[str]:
         start = max(0, center - radius)
@@ -1058,5 +1114,5 @@ class LogViewerScreen(Screen):
             for i in range(start, end)
         ]
 
-    async def action_dismiss(self, result: object = None) -> None:
-        self.app.pop_screen()
+    async def action_dismiss_dialog(self, result: object = None) -> None:
+        self.dismiss(None)

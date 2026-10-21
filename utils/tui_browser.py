@@ -366,10 +366,6 @@ class SessionBrowser(App[int]):
     KEYBAR_PING = [
         ("Esc", "Close", None), ("q", "Close", None),
     ]
-    KEYBAR_LOG = [
-        ("/", "Search", None), ("n", "Next", None), ("N", "Prev", None),
-        ("Esc", "Back", None),
-    ]
 
     def _set_keybar(self, entries: List[Tuple]) -> None:
         try:
@@ -676,9 +672,9 @@ class SessionBrowser(App[int]):
         modal's own widgets and keys keep working (also keeps Enter/e/p
         from opening dialogs underneath or behind an open screen)."""
         if action in ("connect", "edit", "ping"):
-            from .tui_actions import EditSessionModal, LogViewerScreen, PingModal, SessionActionMenu
+            from .tui_actions import EditSessionModal, LogModal, PingModal, SessionActionMenu
             return type(self.screen) not in (
-                SessionActionMenu, LogViewerScreen, EditSessionModal,
+                SessionActionMenu, LogModal, EditSessionModal,
                 PingModal)
         return True
 
@@ -780,7 +776,8 @@ class SessionBrowser(App[int]):
         await self._open_edit_modal(sel[0])
 
     async def action_logs(self) -> None:
-        """Newest log for the highlighted session, in the searchable viewer."""
+        """l: newest log for the highlighted session, in the FAR log
+        dialog (scroll + live filter)."""
         sel = self._selected_session()
         if sel is None:
             self.status_message = "no session highlighted"
@@ -793,13 +790,9 @@ class SessionBrowser(App[int]):
             self.status_message = f"no logs yet for {unquote_display(sel[0])}"
             self._update_status()
             return
-        from .tui_actions import LogViewerScreen
-        self._set_keybar(self.KEYBAR_LOG)
-        self.push_screen(
-            LogViewerScreen(logs[0][0]),
-            callback=lambda _r: self._set_keybar(self.KEYBAR_LIST),
-        )
+        from .tui_actions import LogModal
+        self.push_screen(LogModal(logs[0][0]))
 
     def _logs_dir(self) -> Path:
         from .logs_util import log_dir
-        return log_dir()
+        return log_dir(self.reg_path)

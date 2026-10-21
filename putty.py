@@ -463,8 +463,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.logs:
         from utils.logs_util import pick_and_view_log
         rc = pick_and_view_log(
-            Path(args.logs_dir).expanduser() if args.logs_dir else None
-        )
+            Path(args.logs_dir).expanduser() if args.logs_dir
+            else reg_path.parent)
         return rc if rc is not None else 0
 
     if args.connect is not None:

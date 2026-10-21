@@ -10,10 +10,12 @@ from .ssh_command_util import safe_name
 VIEWER_KEYS = {"n": "-N", "v": "-V"}
 
 
-def log_dir() -> Path:
-    """Where session logs live (same resolution as _wrap_tmux)."""
+def log_dir(reg_path: Optional[Path] = None) -> Path:
+    """Where session logs live - SAME resolution as _wrap_tmux:
+    $PUTTY_LOG_DIR > the .reg file's directory > ~/.putty-cli/logs."""
     return Path(os.environ.get("PUTTY_LOG_DIR")
-                or (Path.home() / ".putty-cli" / "logs")).expanduser()
+                or (reg_path.parent if reg_path is not None
+                    else Path.home() / ".putty-cli" / "logs")).expanduser()
 
 
 def list_logs(directory: Optional[Path] = None, limit: int = 30,
@@ -74,10 +76,7 @@ def pick_and_view_log(directory: Optional[Path] = None) -> Optional[int]:
     pager = os.environ.get("PAGER", "less")
     try:
         # user-configured $PAGER on our own log path, by design
-        # user-configured $PAGER on our own log path, by design
         result = subprocess.run([pager, str(path)])  # nosec B603, B607
-  # nosec B603, B607
-
         return result.returncode
     except FileNotFoundError:
         # No pager installed: dump to stdout as fallback
