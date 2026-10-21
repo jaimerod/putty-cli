@@ -330,7 +330,8 @@ class TestPanes:
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause()
             for win_id, label in (("#recent-win", "RECENT CONNECTIONS"),
-                                  ("#all-win", "ALL CONNECTIONS")):
+                                  ("#all-win", "ALL CONNECTIONS"),
+                                  ("#preview-win", "CONNECTION DETAIL")):
                 win = app.query_one(win_id)
                 assert win.border_title == label
                 assert win.styles.border_title_align == "center"
@@ -650,7 +651,7 @@ class TestSessionActionMenu:
             b, s = box.region, shadow.region
             assert s.width == b.width and s.height == b.height
             assert (s.x, s.y) == (b.x + 2, b.y + 1)
-            assert shadow.styles.background == Color(0, 0, 0, a=0.5)
+            assert shadow.styles.background == Color(0, 0, 0, a=1.0)
 
     async def test_menu_is_transparent_over_browser(self):
         from textual.color import Color
@@ -846,6 +847,70 @@ class TestSessionActionMenu:
                 await pilot.pause()
             shadow = menu.query_one("#ctx-shadow")
             assert str(shadow.render()).strip() == ""
+
+    async def test_menu_shadow_far_styling(self):
+        """FAR-console shadow: opaque black slab (no alpha) with the
+        covered copy dimmed to dark-gray glyphs."""
+        from textual.color import Color
+
+        from utils.tui_actions import SessionActionMenu
+
+        app = SessionBrowser(
+            {"prod:web-1": {"HostName": "a.example.com"},
+             "solo": {"HostName": "d.example.com"}}, [], {}, None,
+            connect_callback=lambda n: None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            # drive the same production entry the click handler calls
+            # (posting synthetic Clicks to a pushed modal is flaky under
+            # the pilot's message pump)
+            app._last_cursor = (app.query_one("#sessions").region.x + 8, 16)
+            await app.run_action_with_modal("prod:web-1")
+            for _ in range(9):
+                await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)  # menu open
+            shadow = app.screen.query_one("#ctx-shadow")
+            assert shadow.styles.background == Color(0, 0, 0)
+            assert shadow.styles.color == Color(85, 85, 85)
+            # echoed lines carry the FAR dark-gray color explicitly
+            content = str(shadow.content)
+            assert "#555555" in content
+            assert "50%" not in content  # no alpha blend markers
+
+    async def test_region_text_uses_composited_raster(self):
+        """Echo source = the composited raster: window frames and the
+        centered caption are captured exactly as painted."""
+        from utils import tui_actions
+
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            rw = app.query_one("#all-win").region
+            text = tui_actions._region_text(
+                app.screen, rw.x, rw.y, rw.width, 2)
+            assert "ALL CONNECTIONS" in text[0]     # caption row
+            assert "╔" in text[0] and "╗" in text[0]  # frame glyphs
+
+    async def test_region_text_falls_back_to_stamping(self, monkeypatch):
+        """Without a compositor raster, leaf-label stamping still echoes
+        the covered text."""
+        from textual.widgets import Static
+
+        from utils import tui_actions
+
+        class FakeRegion:
+            x, y, width, height = 2, 0, 10, 1
+
+        leaf = Static("AB", markup=False)
+        # replace the Widget.region property with a fixed fake geometry
+        # so the unmounted leaf looks stamped-in-place
+        monkeypatch.setattr(Static, "region", FakeRegion, raising=False)
+
+        class FakeScreen:
+            children = (leaf,)   # no _compositor attribute
+
+        text = tui_actions._region_text(FakeScreen(), 0, 0, 10, 1)
+        assert text[0][2:4] == "AB"
 
 
 class TestContextKeyBar:

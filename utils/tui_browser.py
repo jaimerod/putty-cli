@@ -270,7 +270,8 @@ class SessionBrowser(App[int]):
                     yield _PaneList(id="sessions")
             with Vertical(id="preview-col"):
                 yield FarShadow()
-                with FarWindow(id="preview-win"):
+                with FarWindow(id="preview-win",
+                               title="CONNECTION DETAIL"):
                     yield Static("select a session", id="preview",
                                  markup=True)
         yield Static("", id="status")

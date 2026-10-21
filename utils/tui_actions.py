@@ -56,16 +56,50 @@ def _size_str(size: int) -> str:
     return f"{size}B"
 
 
+def _compositor_text(screen: Any, x: int, y: int,
+                     width: int, height: int) -> Optional[List[str]]:
+    """The exact characters the screen's compositor paints in a
+    rectangle (window frames, list rows, input lines included).
+
+    Returns None when the raster is unavailable or too short (headless
+    edge cases), so callers can fall back to label stamping."""
+    compositor = getattr(screen, "_compositor", None)
+    if compositor is None:
+        return None
+    try:
+        strips = compositor.render_strips()
+    except Exception:  # nosec B110 - compositor not ready
+        return None
+    lines: List[str] = []
+    for strip in strips:
+        segs = strip if isinstance(strip, list) \
+            else getattr(strip, "segments", strip)
+        lines.append("".join(getattr(seg, "text", "") or "" for seg in segs))
+    if y + height > len(lines):
+        return None
+    out: List[str] = []
+    for row in lines[y:y + height]:
+        if x + width > len(row):
+            return None
+        out.append(row[x:x + width])
+    return out
+
+
 def _region_text(screen: Any, x: int, y: int,
                  width: int, height: int) -> List[str]:
-    """Reconstruct the plain text shown in a screen rectangle by walking
-    the widget tree and stamping each single-line label's content at its
-    own region (list rows, titles, preview labels, ...). Containers are
-    skipped; only leaf widgets with text contribute.
+    """Reconstruct the text shown in a screen rectangle.
 
-    This is the data for the drop shadow's 'fake transparency': the
-    shadow echoes the content it covers in dimmed light-gray text.
+    Prefers the underlying screen's composited raster (exact glyphs:
+    window frames, list rows, input boxes). Falls back to stamping each
+    single-line leaf label's content at its own region.
+
+    This is the data for the drop shadow's FAR-style 'fake
+    transparency': the shadow paints a solid black backdrop with the
+    covered copy dimmed to FAR dark-gray.
     """
+    composited = _compositor_text(screen, x, y, width, height)
+    if composited is not None:
+        return composited
     grid = [list(" " * width) for _ in range(height)]
 
     def visit(widget: Any) -> None:
@@ -96,10 +130,10 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
 
     A small option box opens where the cursor is; arrows navigate,
     Enter executes, Esc or clicking outside closes. The drop shadow
-    underneath echoes the screen content it covers in dimmed light-gray
-    text - a 'fake transparency' trick (FAR-style) so the shadow reads
-    as a translucent layer rather than an opaque slab. Dismiss result:
-    'connect' | 'ping' | 'copy' | 'logs' | None.
+    underneath is FAR-console-style: a solid black backdrop offset
+    +2/+1 (no alpha) with the covered screen copy still drawn in it,
+    dimmed to FAR dark-gray.
+    Dismiss result: 'connect' | 'ping' | 'copy' | 'logs' | None.
     """
 
     DEFAULT_CSS = """
@@ -149,15 +183,16 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         text-style: bold;
     }
 
-    /* DOS drop shadow for the menu box: echoes the covered content in
-       dimmed light-gray text over a translucent black backdrop. Starts
-       0-sized; _sync_shadow() sizes it to the box + offset and fills it. */
+    /* DOS drop shadow for the menu box, FAR console style: solid black
+       backdrop (no alpha) +2/+1 from the box; _sync_shadow() sizes it
+       to the box + offset and fills it with the covered screen copy,
+       dimmed to FAR dark-gray. Starts 0-sized. */
     #ctx-shadow {
         position: absolute;
         width: 0;
         height: 0;
-        background: #000000 50%;
-        color: #AAAAAA 40%;
+        background: #000000;
+        color: #555555;
         layer: shadow;
     }
     """
@@ -217,7 +252,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
 
     def _sync_shadow(self) -> None:
         """Shadow matches the menu box exactly, offset +2/+1 (DOS), and
-        its text echoes the screen content it covers in dimmed gray."""
+        its text echoes the covered screen copy in FAR dark-gray."""
         try:
             box = self.query_one("#ctx-menu", Vertical)
             shadow = self.query_one("#ctx-shadow", Static)
@@ -234,9 +269,10 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
             return
         lines = _region_text(self._underlying, sx, sy,
                              box.region.width, box.region.height)
-        # escape Rich markup chars so echoed content renders verbatim
+        # escape Rich markup chars so echoed content renders verbatim;
+        # FAR look: covered glyphs dimmed to dark-gray on the black slab
         from rich.markup import escape as escape_markup
-        dimmed = [f"[#AAAAAA]{escape_markup(line.rstrip())}[/]"
+        dimmed = [f"[#555555]{escape_markup(line.rstrip())}[/]"
                   if line.strip() else "" for line in lines]
         shadow.update("\n".join(dimmed))
 
