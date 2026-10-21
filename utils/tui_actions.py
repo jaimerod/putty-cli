@@ -4,11 +4,11 @@ import socket
 import subprocess  # nosec
 import sys
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from textual import events, on
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, Label, RichLog, Static
 
@@ -125,6 +125,33 @@ def _region_text(screen: Any, x: int, y: int,
     return ["".join(row) for row in grid]
 
 
+def _sync_far_shadow(box: Any, shadow: Any, underlying: Any,
+                     offset: Tuple[int, int] = (2, 1)) -> None:
+    """FAR DOS drop shadow for a popup box: opaque black slab (no
+    alpha), matched to the box and offset +2/+1, with the covered
+    screen copy repainted inside, dimmed to FAR dark-gray.
+
+    No-op when the box hasn't been laid out yet (region still 0x0).
+    """
+    if not box.region.width:
+        return
+    sx = box.region.x + offset[0]
+    sy = box.region.y + offset[1]
+    shadow.styles.width = box.region.width
+    shadow.styles.height = box.region.height
+    shadow.styles.offset = (sx, sy)
+    if underlying is None:
+        return
+    lines = _region_text(underlying, sx, sy,
+                         box.region.width, box.region.height)
+    # escape Rich markup chars so echoed content renders verbatim;
+    # FAR look: covered glyphs dimmed to dark-gray on the black slab
+    from rich.markup import escape as escape_markup
+    dimmed = [f"[#555555]{escape_markup(line.rstrip())}[/]"
+              if line.strip() else "" for line in lines]
+    shadow.update("\n".join(dimmed))
+
+
 class SessionActionMenu(ModalScreen[Optional[str]]):
     """    Cursor-positioned context menu (popup) for one session.
 
@@ -206,6 +233,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         ("Ping", "ping"),
         ("Copy ssh command", "copy"),
         ("View logs", "logs"),
+        ("Edit settings", "edit"),
     ]
 
     def __init__(self, session_name: str, cursor: tuple[int, int],
@@ -258,23 +286,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
             shadow = self.query_one("#ctx-shadow", Static)
         except Exception:  # noqa: BLE001 - widgets not mounted yet
             return
-        if not box.region.width:
-            return
-        sx = box.region.x + 2
-        sy = box.region.y + 1
-        shadow.styles.width = box.region.width
-        shadow.styles.height = box.region.height
-        shadow.styles.offset = (sx, sy)
-        if self._underlying is None:
-            return
-        lines = _region_text(self._underlying, sx, sy,
-                             box.region.width, box.region.height)
-        # escape Rich markup chars so echoed content renders verbatim;
-        # FAR look: covered glyphs dimmed to dark-gray on the black slab
-        from rich.markup import escape as escape_markup
-        dimmed = [f"[#555555]{escape_markup(line.rstrip())}[/]"
-                  if line.strip() else "" for line in lines]
-        shadow.update("\n".join(dimmed))
+        _sync_far_shadow(box, shadow, self._underlying)
 
     def _render_items(self) -> None:
         """(Re)apply the -selected class on exactly one option row."""
@@ -345,6 +357,288 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
 
     async def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+def _session_str(session: Dict[str, Any], key: str, default: str = "") -> str:
+    return str(session.get(key, "") or "").strip() or default
+
+
+_DEFAULTS = {
+    "HostName": "",
+    "UserName": "",
+    "PortNumber": "22",
+    "Protocol": "ssh",
+    "PublicKeyFile": "",
+    "ProxyHost": "",
+    "RemoteCommand": "",
+}
+
+
+class _FarFlatButton(Static, can_focus=True):
+    """FAR dialog button: black on light-blue, inverted when focused;
+    activates on Enter/Space/click."""
+
+    def __init__(self, label: str, action: str) -> None:
+        super().__init__(f" {label} ", classes="edit-btn", markup=False)
+        self._action = action
+
+    async def on_click(self, event: events.Click) -> None:
+        if event.button == 1:
+            await self._fire()
+            event.stop()
+
+    async def on_key(self, event: events.Key) -> None:
+        if event.key in ("enter", "space"):
+            event.stop()
+            event.prevent_default()
+            await self._fire()
+
+    async def _fire(self) -> None:
+        # unprefixed actions bubble from the button to the modal screen
+        await self.run_action(self._action)
+
+
+class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
+    """FAR-style dialog mimicking PuTTY's connection settings.
+
+    Fields cover what putty-cli consumes: HostName, UserName, Port,
+    Protocol (ssh/mosh), key/.ppk path, jump host, remote command.
+    Dismiss value: {"values": {key: edited_value}} - only changed
+    fields - or {} for a no-op save, or None when cancelled.
+
+    The Save path refuses quotes/multi-line values (they do not
+    round-trip .reg value lines); everything else is guarded in
+    utils/putty_reg_write_util.py.
+    """
+
+    FIELD_DEFS = [
+        ("Host", "HostName"),
+        ("User", "UserName"),
+        ("Port", "PortNumber"),
+        ("Protocol", "Protocol"),
+        ("Key (.ppk)", "PublicKeyFile"),
+        ("Jump host", "ProxyHost"),
+        ("Remote cmd", "RemoteCommand"),
+    ]
+
+    DEFAULT_CSS = """
+    EditSessionModal { background: transparent; }
+
+    #edit-shadow {
+        position: absolute;
+        width: 0;
+        height: 0;
+        background: #000000;
+        color: #555555;
+        layer: shadow;
+    }
+
+    #edit-box {
+        layout: vertical;
+        background: #5555FF;
+        border: round #AAAAAA;
+        width: 48;
+        height: auto;
+        padding: 0;
+        layer: window;
+    }
+
+    #edit-title {
+        color: #000000;
+        background: #5555FF;
+        text-style: bold;
+        padding: 0 2;
+        height: 1;
+        width: auto;
+    }
+
+    .edit-row {
+        height: 1;
+        width: 100%;
+        layout: horizontal;
+    }
+    .edit-label {
+        width: 13;
+        color: #000000;
+        background: #5555FF;
+        padding: 0 0 0 2;
+        height: 1;
+    }
+    .edit-row Input {
+        border: none;
+        background: #000000;
+        color: #FFFFFF;
+        height: 1;
+        width: 1fr;
+    }
+    .edit-row Input:focus {
+        background: #000080;
+        color: #FFFF55;
+        border: none;
+    }
+
+    #edit-error {
+        color: #FF5555;
+        background: #5555FF;
+        height: 1;
+        padding: 0 2;
+    }
+
+    .edit-buttons {
+        height: 1;
+        width: 100%;
+        layout: horizontal;
+    }
+    .edit-btn {
+        height: 1;
+        width: auto;
+        background: #5555FF;
+        color: #000000;
+        padding: 0 2;
+    }
+    .edit-btn:focus {
+        background: #000000;
+        color: #5555FF;
+        text-style: bold;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, session_name: str,
+                 session: Dict[str, Any], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.session_name = session_name
+        self._session = dict(session)
+        self._original = {
+            key: _session_str(session, key, _DEFAULTS[key])
+            for _, key in self.FIELD_DEFS
+        }
+        # ProxyMethod drives the putty-cli jump-host convention but is
+        # not an editable field: remember it so save can toggle it
+        self._orig_method = str(
+            session.get("ProxyMethod", "0") or "0").strip()
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="edit-shadow", markup=True)
+        with Vertical(id="edit-box"):
+            yield Label(self.session_name, id="edit-title")
+            for label, key in self.FIELD_DEFS:
+                with Horizontal(classes="edit-row"):
+                    yield Static(label, classes="edit-label", markup=False)
+                    yield Input(value=self._original[key],
+                                id=f"edit-{key}")
+            yield Static("", id="edit-error", markup=False)
+            with Horizontal(classes="edit-buttons"):
+                yield _FarFlatButton("Save", "save")
+                yield _FarFlatButton("Cancel", "cancel")
+
+    def on_mount(self) -> None:
+        # FAR dialogs: centered over the browser underneath
+        box = self.query_one("#edit-box", Vertical)
+        box_h = len(self.FIELD_DEFS) + 5  # title + error + buttons + border
+        size = self.size
+        box.styles.offset = (
+            max(0, (size.width - 48) // 2), max(0, (size.height - box_h) // 2))
+        # focus lands AFTER the push settles (call_after_refresh); the
+        # modal's own on_mount focus would be overridden by the push
+        self.call_after_refresh(self._initial_focus)
+
+    def _initial_focus(self) -> None:
+        self.query_one("#edit-HostName", Input).focus()
+        self.call_after_refresh(self._sync_shadow)
+
+    def _sync_shadow(self) -> None:
+        """Same FAR shadow mechanic as the action menu: echoes the
+        covered browser content on the black slab."""
+        try:
+            box = self.query_one("#edit-box", Vertical)
+            shadow = self.query_one("#edit-shadow", Static)
+        except Exception:  # noqa: BLE001 - widgets not mounted yet
+            return
+        _sync_far_shadow(box, shadow, self._underlying_screen)
+
+    @property
+    def _underlying_screen(self) -> Any:
+        """Screen stack entry below this modal (the browser)."""
+        stack = self.app.screen_stack if self.app else []
+        return stack[-2] if len(stack) >= 2 else None
+
+    def on_input_submitted(self, event: "Input.Submitted") -> None:
+        """Enter inside a field moves to the next control (fields then
+        buttons), FAR dialog style."""
+        self._focus_next_field(event.input)
+
+    def _focus_next_field(self, current: Input) -> None:
+        widgets = list(self.query("Input, _FarFlatButton"))
+        try:
+            idx = widgets.index(current)
+        except ValueError:
+            return
+        widgets[(idx + 1) % len(widgets)].focus()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            # sync handler that schedules the (async) cancel through the
+            # proper action mechanism
+            self.call_after_refresh(self.action_cancel)
+
+    async def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def _error(self, msg: str) -> None:
+        self.query_one("#edit-error", Static).update(msg)
+
+    def _collect_changes(self) -> Optional[Dict[str, str]]:
+        values: Dict[str, str] = {}
+        for _, key in self.FIELD_DEFS:
+            values[key] = self.query_one(
+                f"#edit-{key}", Input).value.strip()
+        try:
+            return self._changes_for(values)
+        except ValueError as exc:
+            self._error(str(exc))
+            return None
+
+    def _changes_for(self, values: Dict[str, str]) -> Dict[str, str]:
+        # defaults: PuTTY semantics (empty port = 22, protocol = ssh)
+        port = values["PortNumber"] or "22"
+        if not port.isdigit() or not 1 <= int(port) <= 65535:
+            raise ValueError("Port must be a number 1-65535")
+        values["PortNumber"] = port
+        proto = (values["Protocol"] or "ssh").lower()
+        if proto not in ("ssh", "mosh"):
+            raise ValueError("Protocol must be ssh or mosh")
+        values["Protocol"] = proto
+        for key, val in values.items():
+            if '"' in val:
+                raise ValueError(
+                    f"{key}: quotes can't be stored in .reg lines")
+            if "\r" in val or "\n" in val:
+                raise ValueError(f"{key}: multi-line values are not stored")
+
+        # only fields that actually differ become .reg lines
+        changes = {
+            key: value for key, value in values.items()
+            if value != self._original.get(key, "")
+        }
+        # jump host field drives ProxyMethod 6 (putty-cli convention)
+        jump = values["ProxyHost"].strip()
+        if jump and self._orig_method != "6":
+            changes["ProxyMethod"] = "6"
+        elif not jump and self._orig_method == "6":
+            changes["ProxyMethod"] = "0"
+        return changes
+
+    async def action_save(self) -> None:
+        changes = self._collect_changes()
+        if changes is None:
+            return
+        self.dismiss(changes)
 
 
 class LogViewerScreen(Screen):

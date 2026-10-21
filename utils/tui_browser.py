@@ -16,7 +16,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Input, ListItem, ListView, Static
 
-from .display_util import make_display_pair, session_tag
+from .display_util import session_tag
 from .far_style import (
     FAR_KEYBAR_CSS,
     FAR_SHADOW_CSS,
@@ -27,9 +27,14 @@ from .far_style import (
     KeyBarClicked,
     install_far_theme,
 )
+from .putty_reg_write_util import (
+    RegEditError,
+    edit_session_values,
+    reg_file_stamp,
+)
 from .recent_sessions_util import format_relative_time
 from .ssh_command_util import build_ssh_command
-from .titlecase_util import unquote_display
+from .titlecase_util import smart_title, unquote_display
 
 try:
     from simple_term_menu import TerminalMenu  # noqa: F401
@@ -96,7 +101,9 @@ def _row(
     name: str, session: Dict[str, Any],
     recent_entries: Optional[Dict[str, Dict[str, object]]],
 ) -> SessionRow:
-    _, display, _ = make_display_pair(name, session)
+    # no make_display_pair here: the "→ user@host" hint lives in the
+    # CONNECTION DETAIL pane now; rows stay FAR-panel-terse and single-line
+    display = smart_title(unquote_display(name))
     if recent_entries and name in recent_entries:
         entry = recent_entries[name]
         ts = entry.get("ts")
@@ -246,6 +253,7 @@ class SessionBrowser(App[int]):
         self.filtered_rows: List[SessionRow] = []
         self._active_list_id = "sessions"
         self.status_message = ""
+        self._edit_stamp: Optional[str] = None
 
     KEYBAR = [
         ("F1", "help"), ("F3", "view log"), ("F4", "edit"),
@@ -295,6 +303,10 @@ class SessionBrowser(App[int]):
     KEYBAR_MENU = [
         ("↑↓", "Navigate", None), ("Enter", "Select", None),
         ("Esc", "Close", None),
+    ]
+    KEYBAR_EDIT = [
+        ("Tab", "Next", None), ("Enter", "OK", None),
+        ("Esc", "Cancel", None),
     ]
     KEYBAR_LOG = [
         ("/", "Search", None), ("n", "Next", None), ("N", "Prev", None),
@@ -371,10 +383,19 @@ class SessionBrowser(App[int]):
         if not text:
             return list(rows)
         # filtering hides headers/separators entirely
+        def matches(row: SessionRow) -> bool:
+            if text in row.display.lower() \
+                    or text in unquote_display(row.name).lower():
+                return True
+            # the row shows just the name now; host/user/port stay
+            # searchable so "example.com" or "2222" still finds sessions
+            session = self.usable.get(row.name, {})
+            blob = " ".join(
+                str(session.get(k, "") or "")
+                for k in ("HostName", "UserName", "PortNumber")).lower()
+            return text in blob
         return [r for r in rows
-                if not r.name.startswith("__")
-                and (text in r.display.lower()
-                     or text in unquote_display(r.name).lower())]
+                if not r.name.startswith("__") and matches(r)]
 
     def _fill_list(self, list_view: ListView, rows: List[SessionRow]) -> None:
         list_view.clear()
@@ -514,7 +535,62 @@ class SessionBrowser(App[int]):
         elif action == "logs":
             self.selected_name = name
             await self.action_logs()
+        elif action == "edit":
+            await self._open_edit_modal(name)
         # None = cancelled: nothing to do
+
+    async def _open_edit_modal(self, session_name: str) -> None:
+        """FAR-style edit dialog over the browser; saves via the surgical
+        .reg writer (never regenerating untouched bytes)."""
+        from .tui_actions import EditSessionModal
+        session = self.usable.get(session_name)
+        if session is None:
+            return
+        if self.reg_path is None:
+            self.status_message = "no .reg file to edit"
+            self._update_status()
+            return
+        self._edit_stamp = reg_file_stamp(self.reg_path)
+        self._set_keybar(self.KEYBAR_EDIT)
+        modal = EditSessionModal(session_name, session)
+
+        def on_result(changes: Optional[Dict[str, str]]) -> None:
+            self._set_keybar(self.KEYBAR_LIST)
+            self.call_later(self._edit_saved, changes, session_name)
+
+        self.push_screen(modal, callback=on_result)
+
+    async def _edit_saved(
+        self, changes: Optional[Dict[str, str]], session_name: str,
+    ) -> None:
+        if changes is None:
+            self.status_message = "edit cancelled"
+        elif not changes:
+            self.status_message = "saved (nothing to change)"
+        else:
+            reg_path = self.reg_path
+            if reg_path is None:  # guarded when the dialog opened
+                self.status_message = "no .reg file to edit"
+            else:
+                try:
+                    result = edit_session_values(
+                        reg_path, session_name, changes,
+                        expect_stamp=self._edit_stamp)
+                except RegEditError as e:
+                    self.status_message = f"✗ edit not saved: {e}"
+                else:
+                    self.usable[session_name] = result.session_values
+                    self._rebuild_rows()
+                    backup = result.backup_path.name if result.backup_path \
+                        else "no backup"
+                    self.status_message = f"saved ✓ (backup: {backup})"
+        self._update_status()
+
+    def _rebuild_rows(self) -> None:
+        self.recent_rows = build_recent_rows(
+            self.usable, self.recent_names, self.recent_entries)
+        self.rows = build_all_rows(self.usable, self.group_by_tag)
+        self._refresh_list()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self._update_preview()
@@ -531,8 +607,9 @@ class SessionBrowser(App[int]):
         """Disable the priority Enter binding while a modal/log screen is
         active so the modal's own widgets and keys keep working."""
         if action == "connect":
-            from .tui_actions import LogViewerScreen, SessionActionMenu
-            return type(self.screen) not in (SessionActionMenu, LogViewerScreen)
+            from .tui_actions import EditSessionModal, LogViewerScreen, SessionActionMenu
+            return type(self.screen) not in (
+                SessionActionMenu, LogViewerScreen, EditSessionModal)
         return True
 
     async def action_quit(self) -> None:

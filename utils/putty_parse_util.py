@@ -22,16 +22,12 @@ def _read_reg_text(file_path: Path) -> str:
     return data.decode("utf-8-sig", errors="replace")
 
 
-def parse_putty_reg(file_path: Path) -> Dict[str, Dict[str, str]]:
-    """Parse a PuTTY .reg export into {session_name: {key: value}}.
+def _parse_content(content: str) -> Dict[str, Dict[str, str]]:
+    """Parse already-decoded .reg text into {session_name: {key: value}}.
 
-    Raises FileNotFoundError if the file does not exist, and OSError
-    (or ValueError) if it cannot be read.
-    """
-    if not file_path.is_file():
-        raise FileNotFoundError(f".reg file not found: {file_path}")
-
-    content = _read_reg_text(file_path).replace("\r\n", "\n").lstrip("\ufeff")
+    (Exposed separately so write-back validation can parse in-memory
+    text without touching a file.)"""
+    content = content.replace("\r\n", "\n").lstrip("\ufeff")
 
     sessions: Dict[str, Dict[str, str]] = {}
     current_session = None
@@ -69,3 +65,15 @@ def parse_putty_reg(file_path: Path) -> Dict[str, Dict[str, str]]:
             sessions[current_session][key] = val
 
     return sessions
+
+
+def parse_putty_reg(file_path: Path) -> Dict[str, Dict[str, str]]:
+    """Parse a PuTTY .reg export into {session_name: {key: value}}.
+
+    Raises FileNotFoundError if the file does not exist, and OSError
+    (or ValueError) if it cannot be read.
+    """
+    if not file_path.is_file():
+        raise FileNotFoundError(f".reg file not found: {file_path}")
+
+    return _parse_content(_read_reg_text(file_path))

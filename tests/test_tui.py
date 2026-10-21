@@ -12,6 +12,7 @@ pytest.importorskip("textual")
 
 from textual import events
 from textual.color import Color
+from textual.widgets import Input
 
 import putty
 from utils.tui_actions import run_ping
@@ -291,6 +292,32 @@ class TestBuildRows:
     def test_flat_mode(self):
         rows = build_all_rows(USABLE, group_by_tag=False)
         assert not any(r.name.startswith("__hdr__") for r in rows)
+
+    def test_rows_have_no_host_hint(self):
+        """Rows show the title-cased name only: the → user@host hint
+        lives in the CONNECTION DETAIL pane now."""
+        for r in build_all_rows(USABLE):
+            if r.name.startswith("__"):
+                continue
+            assert "→" not in r.display
+            assert "example.com" not in r.display
+        recents = build_recent_rows(
+            USABLE, ["prod:web-1"], {"prod:web-1": {"ts": None, "exit": None}})
+        assert "→" not in recents[0].display
+
+    async def test_filter_matches_host_and_port_even_without_hint(self):
+        """The hint is gone from rows, but host/user/port text still
+        finds sessions (via the app's own _filter_rows)."""
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            filt = app.query_one("#filter")
+            filt.value = "b.example"
+            await pilot.pause()
+            assert [r.name for r in app.filtered_rows] == ["prod:web-2"]
+            filt.value = "2222"
+            await pilot.pause()
+            assert [r.name for r in app.filtered_rows] == ["prod:web-1"]
 
 
 class TestPanes:
@@ -1150,3 +1177,220 @@ class TestMenuMouseEvents:
             await pilot.pause()
             await pilot.pause()
             assert results == ["logs"]
+
+
+class TestEditModal:
+    """FAR-style Edit dialog: PuTTY-like fields, surgical .reg save."""
+
+    SESSION = {"HostName": "a.example.com", "UserName": "ops",
+               "PortNumber": "2222", "Protocol": "ssh"}
+    NAME = "prod-web-1"
+
+    def _setup(self, tmp_path):
+        """Browser over a REAL tmp .reg (utf-16le, CRLF)."""
+        lines = [
+            "Windows Registry Editor Version 5.00",
+            "",
+            "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\"
+            f"{self.NAME}]",
+        ]
+        for key, value in self.SESSION.items():
+            if key == "PortNumber":
+                lines.append('"PortNumber"=dword:%08x' % int(value))
+            else:
+                lines.append('"%s"="%s"' % (key, value))
+        reg = tmp_path / "putty.reg"
+        text = "\r\n".join(lines) + "\r\n"
+        reg.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+        app = SessionBrowser(
+            {self.NAME: dict(self.SESSION)}, [], {}, reg)
+        return app, reg
+
+    async def test_prefills_from_session(self, tmp_path):
+        app, _reg = self._setup(tmp_path)
+        from utils.tui_actions import EditSessionModal
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, EditSessionModal)
+            assert modal.query_one("#edit-HostName", Input).value \
+                == "a.example.com"
+            assert modal.query_one("#edit-UserName", Input).value == "ops"
+            assert modal.query_one("#edit-PortNumber", Input).value == "2222"
+            assert modal.query_one("#edit-Protocol", Input).value == "ssh"
+            assert modal.query_one("#edit-PublicKeyFile", Input).value == ""
+            # fields are the focus landing target (first field); note
+            # app.focused (not *:focus) - a screen stack keeps every
+            # screen's last-focused widget matching the :focus pseudo
+            assert app.focused.id == "edit-HostName"
+
+    async def test_save_writes_reg_and_refreshes_browser(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+
+        app, reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-HostName", Input).value = "h-new"
+            modal.query_one("#edit-RemoteCommand", Input).value = "htop"
+            await modal.action_save()
+            for _ in range(3):
+                await pilot.pause()
+            # surgical write on disk: only those two lines
+            parsed = parse_putty_reg(reg)
+            assert parsed[self.NAME]["HostName"] == "h-new"
+            assert parsed[self.NAME]["RemoteCommand"] == "htop"
+            # browser sees the new values without a restart
+            assert app.usable[self.NAME]["HostName"] == "h-new"
+            assert "saved" in app.status_message
+            assert "backup" in app.status_message
+            # rows rebuilt from refreshed data
+            rows = [c.row.name for c in app.query_one("#sessions").children]
+            assert self.NAME in rows
+
+    async def test_escape_cancels_without_write(self, tmp_path):
+        app, reg = self._setup(tmp_path)
+        before = reg.read_bytes()
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            app.screen.query_one("#edit-HostName", Input).value = "nope"
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.pause()
+            assert reg.read_bytes() == before          # nothing written
+            assert "edit cancelled" in app.status_message
+            assert app.query_one("*:focus").id != "edit-HostName"
+
+    async def test_port_validation_stays_open(self, tmp_path):
+        app, reg = self._setup(tmp_path)
+        before = reg.read_bytes()
+        from utils.tui_actions import EditSessionModal
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-PortNumber", Input).value = "abc"
+            await modal.action_save()
+            await pilot.pause()
+            assert isinstance(app.screen, EditSessionModal)  # still open
+            assert "1-65535" in str(modal.query_one("#edit-error").render())
+            assert reg.read_bytes() == before             # nothing written
+
+    async def test_quote_rejected_in_modal(self, tmp_path):
+        app, reg = self._setup(tmp_path)
+        before = reg.read_bytes()
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-RemoteCommand", Input).value = 'say "hi"'
+            await modal.action_save()
+            await pilot.pause()
+            assert isinstance(app.screen, type(app.screen))  # still open
+            assert "quotes" in str(modal.query_one("#edit-error").render())
+            assert reg.read_bytes() == before
+
+    async def test_jump_host_toggles_proxy_method(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+
+        app, reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-ProxyHost", Input).value = "j.example.com"
+            await modal.action_save()
+            for _ in range(3):
+                await pilot.pause()
+            parsed = parse_putty_reg(reg)
+            values = parsed[self.NAME]
+            assert values["ProxyHost"] == "j.example.com"
+            assert values["ProxyMethod"] == "6"   # toggled automatically
+
+    async def test_clearing_jump_host_resets_proxy_method(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+
+        session = dict(self.SESSION, ProxyMethod="6",
+                       ProxyHost="j.example.com")
+        reg = tmp_path / "putty.reg"
+        lines = [
+            "Windows Registry Editor Version 5.00", "",
+            "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\"
+            f"{self.NAME}]",
+        ]
+        for key, value in session.items():
+            if key in ("PortNumber", "ProxyMethod"):
+                lines.append('"%s"=dword:%08x' % (key, int(value)))
+            else:
+                lines.append('"%s"="%s"' % (key, value))
+        reg.write_bytes(
+            b"\xff\xfe" + ("\r\n".join(lines) + "\r\n").encode("utf-16-le"))
+        app = SessionBrowser({self.NAME: dict(session)}, [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            assert modal.query_one("#edit-ProxyHost", Input).value \
+                == "j.example.com"
+            modal.query_one("#edit-ProxyHost", Input).value = ""
+            await modal.action_save()
+            for _ in range(3):
+                await pilot.pause()
+            values = parse_putty_reg(reg)[self.NAME]
+            assert values["ProxyHost"] == ""
+            assert values["ProxyMethod"] == "0"    # toggled back off
+
+    async def test_enter_gates_while_modal_open(self, tmp_path):
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            assert app.check_action("connect", ()) is True
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            assert app.check_action("connect", ()) is False
+            await pilot.press("enter")  # must NOT connect
+            await pilot.pause()
+            assert app.selected_name is None
+
+    async def test_edit_keybar_swaps_and_restores(self, tmp_path):
+        from utils.far_style import FARKeyBar
+
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            text = app.query_one("#keybar", FARKeyBar).bar_text()
+            assert "OK" in text and "Cancel" in text
+            await pilot.press("escape")
+            await pilot.pause()
+            text = app.query_one("#keybar", FARKeyBar).bar_text()
+            assert "Find" in text  # browser keybar restored
+
+    async def test_right_click_menu_reaches_edit(self, tmp_path):
+        """menu -> Edit settings -> the FAR edit dialog opens."""
+        from utils.tui_actions import EditSessionModal, SessionActionMenu
+
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.run_action_with_modal(self.NAME)   # opens popup menu
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)
+            for _ in range(4):                           # Connect..Edit
+                await pilot.press("down")
+            await pilot.press("enter")                   # Edit settings
+            for _ in range(5):
+                await pilot.pause()
+            assert isinstance(app.screen, EditSessionModal)
