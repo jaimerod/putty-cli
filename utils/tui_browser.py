@@ -18,6 +18,7 @@ from textual.widgets import Input, ListItem, ListView, Static
 
 from .display_util import session_tag
 from .far_style import (
+    ACTIVE_PALETTE,
     FAR_KEYBAR_CSS,
     FAR_SHADOW_CSS,
     FAR_WINDOW_CSS,
@@ -189,29 +190,30 @@ async def app_push_screen(
 class SessionBrowser(App[int]):
     """putty-cli session browser; returns 0 normally, 1 on error."""
 
-    CSS = """
-    /* FAR palette: blue bg, silver text, cyan selection */
-    .browser-bg { background: $background; }
-    ListView { height: 1fr; background: $background; color: $foreground; }
-    ListView > ListItem.--highlight { background: $primary; color: #000000; }
-    #filter { dock: top; background: $background; color: $foreground;
-             border: solid #AAAAAA; margin: 0 1 1 1; }
-    #title-bar { dock: top; height: 1; color: $secondary;
-                 background: $background; padding: 0 1; }
-    #list-col { width: 2fr; }
-    #recent-win { height: 40%; }
-    #all-win { height: 1fr; }
-    #preview-col {
+    CSS = f"""
+    /* FAR chrome, palette-driven (ACTIVE_PALETTE via PUTTY_THEME) */
+    .browser-bg {{ background: $background; }}
+    ListView {{ height: 1fr; background: $background; color: $foreground; }}
+    ListView > ListItem.--highlight {{ background: $primary;
+        color: {ACTIVE_PALETTE.highlight_fg}; }}
+    #filter {{ dock: top; background: $background; color: $foreground;
+             border: solid {ACTIVE_PALETTE.frame}; margin: 0 1 1 1; }}
+    #title-bar {{ dock: top; height: 1; color: $secondary;
+                 background: $background; padding: 0 1; }}
+    #list-col {{ width: 2fr; }}
+    #recent-win {{ height: 40%; }}
+    #all-win {{ height: 1fr; }}
+    #preview-col {{
         width: 1fr;
         padding: 0 1;
         color: $foreground;
         background: $background;
-    }
-    #preview { padding: 0 1; color: $foreground; }
-    Static#status { dock: bottom; height: 1; color: $primary;
-                    background: $background; padding: 0 1; }
-    FARKeyBar { dock: bottom; }
-    FARKeyBar#ctx-keybar { dock: bottom; }
+    }}
+    #preview {{ padding: 0 1; color: $foreground; }}
+    Static#status {{ dock: bottom; height: 1; color: $primary;
+                    background: $background; padding: 0 1; }}
+    FARKeyBar {{ dock: bottom; }}
+    FARKeyBar#ctx-keybar {{ dock: bottom; }}
     """ + FAR_SHADOW_CSS + FAR_WINDOW_CSS + FAR_KEYBAR_CSS
 
     BINDINGS = [

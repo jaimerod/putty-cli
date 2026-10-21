@@ -15,6 +15,8 @@ from textual.color import Color
 from textual.widgets import Input
 
 import putty
+from utils.far_style import ACTIVE_PALETTE, to_textual_theme
+from utils.palette_util import get_palette
 from utils.tui_actions import run_ping
 from utils.tui_browser import SessionBrowser, build_all_rows, build_recent_rows, preview_text
 
@@ -363,7 +365,7 @@ class TestPanes:
                 assert win.border_title == label
                 assert win.styles.border_title_align == "center"
                 assert win.styles.border_title_color \
-                    == Color(255, 255, 85)
+                    == Color.parse(ACTIVE_PALETTE.title)
             window = app.query_one("#recent-win")
             frame_top = window.region.y  # caption is inside the frame row
             assert app.query_one("#recents").region.y \
@@ -678,7 +680,8 @@ class TestSessionActionMenu:
             b, s = box.region, shadow.region
             assert s.width == b.width and s.height == b.height
             assert (s.x, s.y) == (b.x + 2, b.y + 1)
-            assert shadow.styles.background == Color(0, 0, 0, a=1.0)
+            assert shadow.styles.background == \
+                Color.parse(ACTIVE_PALETTE.shadow) and s.width > 0
 
     async def test_menu_is_transparent_over_browser(self):
         from textual.color import Color
@@ -693,7 +696,7 @@ class TestSessionActionMenu:
             await pilot.pause()
             base, menu = app.screen_stack
             assert menu.styles.background == Color(0, 0, 0, a=0)
-            assert base.styles.background == Color(0, 0, 170)
+            assert base.styles.background == Color.parse(ACTIVE_PALETTE.bg)
             # menu positioned near the click (row 0 -> region near top)
             menu = app.screen.query_one("#ctx-menu")
             assert abs(menu.region.x - app.screen._last_click_x) < 3 \
@@ -897,11 +900,12 @@ class TestSessionActionMenu:
                 await pilot.pause()
             assert isinstance(app.screen, SessionActionMenu)  # menu open
             shadow = app.screen.query_one("#ctx-shadow")
-            assert shadow.styles.background == Color(0, 0, 0)
-            assert shadow.styles.color == Color(85, 85, 85)
+            assert shadow.styles.background \
+                == Color.parse(ACTIVE_PALETTE.shadow)
+            assert shadow.styles.color == Color.parse(ACTIVE_PALETTE.dim)
             # echoed lines carry the FAR dark-gray color explicitly
             content = str(shadow.content)
-            assert "#555555" in content
+            assert ACTIVE_PALETTE.dim in content
             assert "50%" not in content  # no alpha blend markers
 
     async def test_region_text_uses_composited_raster(self):
@@ -981,9 +985,7 @@ class TestContextKeyBar:
             assert not app.is_running
 
     async def test_keybar_slot_colors(self):
-        """Key chip black/gray, description blue/black (FAR look)."""
-        from textual.color import Color
-
+        """Key chip / description colors flow from the palette."""
         from utils.far_style import FARKeyBar
         app = SessionBrowser(USABLE, [], {}, None)
         async with app.run_test(size=(100, 30)) as pilot:
@@ -995,9 +997,11 @@ class TestContextKeyBar:
                     continue
                 key_st = child.children[0].styles
                 desc_st = child.children[1].styles
-                assert key_st.background == Color(0, 0, 0)
-                assert key_st.color == Color(170, 170, 170)
-                assert desc_st.color == Color(255, 255, 255)
+                assert key_st.background \
+                    == Color.parse(ACTIVE_PALETTE.key_bg)
+                assert key_st.color == Color.parse(ACTIVE_PALETTE.key_text)
+                assert desc_st.color \
+                    == Color.parse(ACTIVE_PALETTE.desc_text)
                 break
 
     async def test_filter_focus_swaps_keybar(self):
@@ -1394,3 +1398,70 @@ class TestEditModal:
             for _ in range(5):
                 await pilot.pause()
             assert isinstance(app.screen, EditSessionModal)
+
+
+class TestThemePalettes:
+    """Palettes are data; every TUI color flows from one entry."""
+
+    def test_all_roles_present_in_every_palette(self):
+        from dataclasses import fields as dc_fields
+
+        from utils.palette_util import FAR_PALETTE, MONOKAI_PALETTE, Palette
+
+        def complete(palette) -> bool:
+            return all(
+                getattr(palette, f.name) for f in dc_fields(Palette))
+        assert complete(FAR_PALETTE) and complete(MONOKAI_PALETTE)
+
+    def test_get_palette_selects_and_validates(self):
+        assert get_palette("monokai").bg == "#272822"
+        assert get_palette("monokai").selected_bg == "#F92672"
+        assert get_palette("far").bg == "#0000AA"
+        assert get_palette(None).bg == "#0000AA"     # default = far
+        with pytest.raises(KeyError, match="known themes"):
+            get_palette("gruvbox")
+
+    def test_css_builders_emit_palette_colors_only(self):
+        mono = get_palette("monokai")
+
+        from utils.far_style import far_keybar_css, far_shadow_css, far_window_css
+        builders = (far_shadow_css(mono), far_window_css(mono),
+                    far_keybar_css(mono))
+        combined = "\n".join(builders)
+        # monokai in, no FAR blue anywhere
+        assert "#272822" in combined and "#0000AA" not in combined
+        assert mono.frame in combined and mono.title in combined
+
+    def test_textual_theme_maps_roles(self):
+        mono = to_textual_theme(get_palette("monokai"))
+        assert mono.name == "monokai"
+        assert mono.primary == "#49483E"    # cursor bar
+        assert mono.secondary == "#FD971F"  # captions
+        assert mono.background == "#272822"
+        assert mono.error == "#F92672"
+        far = to_textual_theme(get_palette("far"))
+        assert far.primary == "#00AAAA" and far.background == "#0000AA"
+
+    async def test_browser_activates_active_palette_theme(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            assert app.theme == ACTIVE_PALETTE.name
+            # the palette's variables really drive the chrome
+            assert app.get_css_variables()["primary"] \
+                == ACTIVE_PALETTE.highlight_bg
+
+    async def test_monokai_palette_installable(self):
+        """A palette can be force-installed programmatically
+        (PUTTY_THEME pre-selects it for normal runs)."""
+        mono = get_palette("monokai")
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            from utils.far_style import install_far_theme
+            install_far_theme(app, mono)
+            await pilot.pause()
+            assert app.theme == "monokai"
+            shadow = get_palette("monokai").shadow
+            assert app.get_css_variables()["background"] == mono.bg
+            assert shadow == "#000000"

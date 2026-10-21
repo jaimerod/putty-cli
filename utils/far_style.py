@@ -1,5 +1,9 @@
 """FAR Manager (classic DOS) color scheme + reusable window chrome.
 
+All chrome and every color flow from a Palette (utils/palette_util.py);
+the ACTIVE_PALETTE is chosen by PUTTY_THEME at import time (putty.py
+loads .env before the TUI, so env vars and .env both work).
+
 Palette extracted from FAR's default color table (16-color VGA/DOS):
   - panels/dialogs/menus on dark blue
   - silver normal text, white bright text
@@ -14,6 +18,7 @@ widget modules; custom widget classes' DEFAULT_CSS is unreliable in
 this setup, so all FAR styling is exposed as CSS constants to be
 embedded in the app's CSS.
 """
+import os
 from typing import List, Optional, Sequence, Tuple
 
 from textual import events
@@ -21,6 +26,8 @@ from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.theme import Theme
 from textual.widgets import Static
+
+from .palette_util import Palette, get_palette
 
 # ── FAR classic palette (VGA 6-bit values) ──────────────────────────────────
 FAR_BLUE = "#0000AA"      # panel/dialog background
@@ -31,107 +38,122 @@ FAR_WHITE = "#FFFFFF"     # bright text
 FAR_YELLOW = "#FFFF55"    # titles, key numbers
 FAR_GRAY = "#555555"      # dimmed text
 
-FAR_THEME = Theme(
-    name="far",
-    primary=FAR_AQUA,
-    secondary=FAR_YELLOW,
-    accent="#5555FF",
-    foreground=FAR_SILVER,
-    background=FAR_BLUE,
-    surface=FAR_BLUE,
-    panel="#00005A",
-    success="#00AA00",
-    warning=FAR_YELLOW,
-    error="#FF5555",
-    dark=True,
-)
+def to_textual_theme(p: Palette) -> Theme:
+    """Palette -> Textual Theme: fuels the $-style CSS variables."""
+    return Theme(
+        name=p.name,
+        primary=p.highlight_bg,
+        secondary=p.title,
+        accent=p.accent,
+        foreground=p.text,
+        background=p.bg,
+        surface=p.bg,
+        panel=p.panel,
+        success=p.success,
+        warning=p.warning,
+        error=p.error,
+        dark=True,
+    )
+
+# The active palette is fixed per run (read once, before CSS is built):
+# PUTTY_THEME=monokai|far, from the environment or .env (loaded by
+# putty.py main before the TUI modules are imported).
+ACTIVE_PALETTE = get_palette(os.environ.get("PUTTY_THEME", "far"))
+FAR_THEME = to_textual_theme(ACTIVE_PALETTE)
 
 # Drop shadow block styling - include in the app CSS.
-FAR_SHADOW_CSS = """
-.far-shadow {
+def far_shadow_css(p: Palette) -> str:
+    return f"""
+.far-shadow {{
     position: absolute;
     width: 100%;
     height: 100%;
     offset: 2 1;
-    background: #000000 50%;
+    background: {p.window_shadow};
     layer: shadow;
-}
-FarWindow {
+}}
+FarWindow {{
     layer: window;
-}
+}}
 """
 
-# FAR-style window frame: silver double-line border on blue.
+# FAR-style window frame: frame-colored border on the panel color.
 # Window captions (border_title) sit inline in the top border row,
-# centered, yellow on blue - the FAR.exe dialog-title look.
-FAR_WINDOW_CSS = """
-FarWindow {
-    border: double #AAAAAA;
-    background: #0000AA;
+# centered - the FAR.exe dialog-title look.
+def far_window_css(p: Palette) -> str:
+    return f"""
+FarWindow {{
+    border: double {p.frame};
+    background: {p.bg};
     width: 1fr;
     height: 1fr;
     border-title-align: center;
-    border-title-color: #FFFF55;
-}
-FarWindow > Static {
-    color: #AAAAAA;
-}
+    border-title-color: {p.title};
+}}
+FarWindow > Static {{
+    color: {p.text};
+}}
 """
 
 # FAR-style function key bar: slots equally spaced; each slot =
-# black/gray key chip + blue/black description; clickable.
-FAR_KEYBAR_CSS = """
-FARKeyBar {
+# dark key chip + accented description; clickable.
+def far_keybar_css(p: Palette) -> str:
+    return f"""
+FARKeyBar {{
     dock: bottom;
     height: 1;
     width: 100%;
     layout: horizontal;
-    background: #0000AA;
-}
+    background: {p.bg};
+}}
 
-.keybar-slot {
+.keybar-slot {{
     width: 1fr;
     height: 1;
     max-height: 1;
     layout: horizontal;
-}
+}}
 
-.keybar-key {
-    background: #000000;
-    color: #AAAAAA;
+.keybar-key {{
+    background: {p.key_bg};
+    color: {p.key_text};
     padding: 0 1 0 0;
     height: 1;
     width: auto;
     min-width: 4;
-}
+}}
 
-.keybar-desc {
-    background: #0055FF;
-    color: #FFFFFF;
+.keybar-desc {{
+    background: {p.desc_bg};
+    color: {p.desc_text};
     padding: 0 1;
     height: 1;
     width: 1fr;
     overflow: hidden;
-}
+}}
 
-.keybar-status {
-    background: #0000AA;
-    color: #00AAAA;
+.keybar-status {{
+    background: {p.bg};
+    color: {p.highlight_bg};
     height: 1;
     width: auto;
     padding: 0 1;
-}
+}}
 
-.keybar-slot:hover .keybar-key {
-    background: #555555;
-    color: #FFFFFF;
-}
+.keybar-slot:hover .keybar-key {{
+    background: {p.dim};
+    color: {p.bright};
+}}
 
-.keybar-slot:hover .keybar-desc {
-    background: #00AAAA;
-    color: #000000;
-}
+.keybar-slot:hover .keybar-desc {{
+    background: {p.highlight_bg};
+    color: {p.highlight_fg};
+}}
 """
+
+FAR_SHADOW_CSS = far_shadow_css(ACTIVE_PALETTE)
+FAR_WINDOW_CSS = far_window_css(ACTIVE_PALETTE)
+FAR_KEYBAR_CSS = far_keybar_css(ACTIVE_PALETTE)
 
 
 class KeyBarClicked(Message):
@@ -255,7 +277,8 @@ class FarWindow(Vertical, can_focus=False):
         self.title_text = title
 
 
-def install_far_theme(app) -> None:
-    """Register + activate the FAR theme on a Textual app."""
-    app.register_theme(FAR_THEME)
-    app.theme = "far"
+def install_far_theme(app, palette: Optional[Palette] = None) -> None:
+    """Register + activate the palette on a Textual app."""
+    theme = to_textual_theme(palette or ACTIVE_PALETTE)
+    app.register_theme(theme)
+    app.theme = theme.name

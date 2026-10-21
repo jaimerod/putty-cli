@@ -70,8 +70,18 @@ putty-cli --reg FILE           use a specific .reg file
   built without side effects (no puttygen run, no logs written)
 - keys: Enter connect · click select · Tab panes · right-click context
   menu · p ping · y copy command · l logs · q quit
-- right-click opens a cursor-positioned context menu (arrows navigate,
-  Enter executes, Esc or clicking outside closes)
+- right-click opens a cursor-positioned context menu (Connect / Ping /
+  Copy / Logs / **Edit settings**; arrows navigate, Enter executes,
+  Esc or clicking outside closes)
+- **Edit settings** opens a FAR-style dialog with PuTTY connection
+  fields (Host, User, Port, Protocol ssh/mosh, .ppk key path, jump
+  host, remote command). Saving performs *surgical* .reg write-back:
+  only the changed value lines are rewritten inside that one session
+  section — the file is never regenerated — plus an automatic
+  timestamped `.bak` backup, a staleness guard (a fresh Windows
+  re-export is never clobbered), and re-parse validation. Setting a
+  jump host toggles `ProxyMethod 6` automatically; quotes are refused
+  (.reg value lines can't round-trip them)
 - connect suspends the UI and hands the terminal to tmux; the browser
   redraws when the session ends
 - Copy uses the tmux buffer when inside tmux, else OSC52
@@ -80,6 +90,13 @@ Requires the optional extra: `pip install 'putty-cli[tui]'` (or
 `pip install textual`). Without it, the browser prints a note and the
 classic simple-term-menu picker takes over (`--no-tui` forces the
 classic picker; `--fzf` overrides both).
+
+**Theming**: all TUI colors flow from a palette (see
+`utils/palette_util.py`); select with `PUTTY_THEME=far|monokai` (env
+or .env). `far` = classic DOS blue/silver/cyan; `monokai` =
+dark `#272822` panels, warm gray frames, pink selection. Adding a
+theme = adding a `Palette` entry — every role (frames, captions,
+menus, inputs, key bar, shadows) is one field.
 ```
 
 ## Interactive features

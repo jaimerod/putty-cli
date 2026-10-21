@@ -12,7 +12,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, Label, RichLog, Static
 
-from .far_style import FARKeyBar, KeyBarClicked
+from .far_style import ACTIVE_PALETTE, FARKeyBar, KeyBarClicked
 
 
 def run_ping(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -147,7 +147,7 @@ def _sync_far_shadow(box: Any, shadow: Any, underlying: Any,
     # escape Rich markup chars so echoed content renders verbatim;
     # FAR look: covered glyphs dimmed to dark-gray on the black slab
     from rich.markup import escape as escape_markup
-    dimmed = [f"[#555555]{escape_markup(line.rstrip())}[/]"
+    dimmed = [f"[{ACTIVE_PALETTE.dim}]{escape_markup(line.rstrip())}[/]"
               if line.strip() else "" for line in lines]
     shadow.update("\n".join(dimmed))
 
@@ -163,65 +163,65 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
     Dismiss result: 'connect' | 'ping' | 'copy' | 'logs' | None.
     """
 
-    DEFAULT_CSS = """
-    SessionActionMenu { background: transparent !important; }
+    DEFAULT_CSS = f"""
+    SessionActionMenu {{ background: transparent !important; }}
 
-    #ctx-menu {
+    #ctx-menu {{
         layout: vertical;
-        /* FAR popup-dialog scheme: lighter blue background, silver frame */
-        background: #5555FF;
-        border: solid #AAAAAA;
+        /* popup-dialog scheme from the palette: lighter surface,
+           frame-colored border */
+        background: {ACTIVE_PALETTE.popup_bg};
+        border: solid {ACTIVE_PALETTE.frame};
         width: auto;   /* sized to the widest child */
         height: auto;
         padding: 0;
         layer: window;
         box-sizing: border-box;
-    }
+    }}
 
     /* children must not claim free space */
-    #ctx-menu VerticalScroll {
+    #ctx-menu VerticalScroll {{
         width: auto;
         height: auto;
         max-height: 16;
-    }
+    }}
 
-    #ctx-title {
-        color: #000000;   /* FAR popup titles: black on light blue */
-        background: #5555FF;
+    #ctx-title {{
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
         text-style: bold;
         padding: 0 2;
         height: 1;
         width: auto;
-    }
+    }}
 
-    /* options: black text on light blue, full-row width */
-    .ctx-option {
-        background: #5555FF;
-        color: #000000;
+    /* options: full-row width, popup colors */
+    .ctx-option {{
+        background: {ACTIVE_PALETTE.popup_bg};
+        color: {ACTIVE_PALETTE.popup_text};
         padding: 0 2;
         height: 1;
         width: auto;
-    }
+    }}
 
-    /* selected: reversed (light blue text on black) */
-    .ctx-option.-selected {
-        background: #000000;
-        color: #5555FF;
+    /* selected: inverted */
+    .ctx-option.-selected {{
+        background: {ACTIVE_PALETTE.selected_bg};
+        color: {ACTIVE_PALETTE.selected_fg};
         text-style: bold;
-    }
+    }}
 
-    /* DOS drop shadow for the menu box, FAR console style: solid black
-       backdrop (no alpha) +2/+1 from the box; _sync_shadow() sizes it
-       to the box + offset and fills it with the covered screen copy,
-       dimmed to FAR dark-gray. Starts 0-sized. */
-    #ctx-shadow {
+    /* DOS drop shadow (FAR console): solid black slab offset +2/+1;
+       _sync_shadow() sizes it to the box + offset and fills it with
+       the covered copy dimmed to the palette's dark-gray */
+    #ctx-shadow {{
         position: absolute;
         width: 0;
         height: 0;
-        background: #000000;
-        color: #555555;
+        background: {ACTIVE_PALETTE.shadow};
+        color: {ACTIVE_PALETTE.dim};
         layer: shadow;
-    }
+    }}
     """
 
     BINDINGS = [
@@ -421,86 +421,86 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
         ("Remote cmd", "RemoteCommand"),
     ]
 
-    DEFAULT_CSS = """
-    EditSessionModal { background: transparent; }
+    DEFAULT_CSS = f"""
+    EditSessionModal {{ background: transparent; }}
 
-    #edit-shadow {
+    #edit-shadow {{
         position: absolute;
         width: 0;
         height: 0;
-        background: #000000;
-        color: #555555;
+        background: {ACTIVE_PALETTE.shadow};
+        color: {ACTIVE_PALETTE.dim};
         layer: shadow;
-    }
+    }}
 
-    #edit-box {
+    #edit-box {{
         layout: vertical;
-        background: #5555FF;
-        border: round #AAAAAA;
+        background: {ACTIVE_PALETTE.popup_bg};
+        border: round {ACTIVE_PALETTE.frame};
         width: 48;
         height: auto;
         padding: 0;
         layer: window;
-    }
+    }}
 
-    #edit-title {
-        color: #000000;
-        background: #5555FF;
+    #edit-title {{
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
         text-style: bold;
         padding: 0 2;
         height: 1;
         width: auto;
-    }
+    }}
 
-    .edit-row {
+    .edit-row {{
         height: 1;
         width: 100%;
         layout: horizontal;
-    }
-    .edit-label {
+    }}
+    .edit-label {{
         width: 13;
-        color: #000000;
-        background: #5555FF;
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
         padding: 0 0 0 2;
         height: 1;
-    }
-    .edit-row Input {
+    }}
+    .edit-row Input {{
         border: none;
-        background: #000000;
-        color: #FFFFFF;
+        background: {ACTIVE_PALETTE.input_bg};
+        color: {ACTIVE_PALETTE.input_fg};
         height: 1;
         width: 1fr;
-    }
-    .edit-row Input:focus {
-        background: #000080;
-        color: #FFFF55;
+    }}
+    .edit-row Input:focus {{
+        background: {ACTIVE_PALETTE.input_focus_bg};
+        color: {ACTIVE_PALETTE.input_focus_fg};
         border: none;
-    }
+    }}
 
-    #edit-error {
-        color: #FF5555;
-        background: #5555FF;
+    #edit-error {{
+        color: {ACTIVE_PALETTE.error};
+        background: {ACTIVE_PALETTE.popup_bg};
         height: 1;
         padding: 0 2;
-    }
+    }}
 
-    .edit-buttons {
+    .edit-buttons {{
         height: 1;
         width: 100%;
         layout: horizontal;
-    }
-    .edit-btn {
+    }}
+    .edit-btn {{
         height: 1;
         width: auto;
-        background: #5555FF;
-        color: #000000;
+        background: {ACTIVE_PALETTE.popup_bg};
+        color: {ACTIVE_PALETTE.popup_text};
         padding: 0 2;
-    }
-    .edit-btn:focus {
-        background: #000000;
-        color: #5555FF;
+    }}
+    .edit-btn:focus {{
+        background: {ACTIVE_PALETTE.selected_bg};
+        color: {ACTIVE_PALETTE.selected_fg};
         text-style: bold;
-    }
+    }}
     """
 
     BINDINGS = [
@@ -664,29 +664,29 @@ class LogViewerScreen(Screen):
         self.match_positions: List[int] = []
         self.match_index: int = -1
 
-    DEFAULT_CSS = """
-    LogViewerScreen { background: #0000AA; }
-    #log-search {
+    DEFAULT_CSS = f"""
+    LogViewerScreen {{ background: {ACTIVE_PALETTE.bg}; }}
+    #log-search {{
         dock: top;
-        background: #0000AA;
-        color: #FFFF55;
+        background: {ACTIVE_PALETTE.bg};
+        color: {ACTIVE_PALETTE.title};
         border: hidden;
         height: 1;
         padding: 0 1;
-    }
-    #log-scroll {
-        border: solid #AAAAAA;
-        background: #0000AA;
+    }}
+    #log-scroll {{
+        border: solid {ACTIVE_PALETTE.frame};
+        background: {ACTIVE_PALETTE.bg};
         margin: 1 2 1 2;
-    }
-    #log-status {
+    }}
+    #log-status {{
         dock: bottom;
         height: 1;
-        background: #0000AA;
-        color: #00AAAA;
+        background: {ACTIVE_PALETTE.bg};
+        color: {ACTIVE_PALETTE.highlight_bg};
         padding: 0 2;
-    }
-    RichLog { background: #0000AA; color: #AAAAAA; }
+    }}
+    RichLog {{ background: {ACTIVE_PALETTE.bg}; color: {ACTIVE_PALETTE.text}; }}
     """
 
     def compose(self) -> ComposeResult:
