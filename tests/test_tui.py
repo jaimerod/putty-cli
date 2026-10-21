@@ -623,6 +623,19 @@ class TestSessionActionMenu:
             await pilot.pause()
             await pilot.pause()
             assert not isinstance(app.screen, SessionActionMenu)
+        called = []
+        app = SessionBrowser(
+            {"solo": {"HostName": "h"}}, [], {}, None,
+            connect_callback=lambda n: called.append(n))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            lv = app.query_one("#sessions")
+            lv.index = 0
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+        assert called == ["solo"]
+        assert app.selected_name == "solo"
 
 
     async def test_menu_shadow_echoes_underlying_content(self):
@@ -896,71 +909,3 @@ class TestMenuMouseEvents:
             await pilot.pause()
             await pilot.pause()
             assert results == ["logs"]
-
-
-class TestClickGrammar:
-    """Single click selects; double click connects; right click = menu."""
-
-    def _click(self, app, idx, button=1, chain=1):
-        from textual import events
-        lv = app.query_one("#sessions")
-        item = lv.children[idx]
-        r = item.region
-        return events.Click(
-            widget=item, x=r.x + 1, y=r.y + 1, delta_x=0, delta_y=0,
-            button=button, shift=False, meta=False, ctrl=False, chain=chain,
-            screen_x=r.x + 1, screen_y=r.y + 1, style=None)
-
-    async def test_single_click_selects_only(self):
-        called = []
-        app = SessionBrowser(
-            {"solo": {"HostName": "h"}}, [], {}, None,
-            connect_callback=lambda n: called.append(n))
-        async with app.run_test(size=(110, 30)) as pilot:
-            await pilot.pause()
-            app.post_message(self._click(app, 0, button=1, chain=1))
-            await pilot.pause()
-            await pilot.pause()
-            # selected (highlighted) but NOT connected
-            assert called == []
-            assert app._current_row().name == "solo"
-            assert "h" in str(app.query_one("#preview").render())
-
-    async def test_double_click_connects(self):
-        called = []
-        app = SessionBrowser(
-            {"solo": {"HostName": "h"}}, [], {}, None,
-            connect_callback=lambda n: called.append(n))
-        async with app.run_test(size=(110, 30)) as pilot:
-            await pilot.pause()
-            # a real double click = chain=1 then chain=2
-            app.post_message(self._click(app, 0, button=1, chain=1))
-            await pilot.pause()
-            app.post_message(self._click(app, 0, button=1, chain=2))
-            await pilot.pause()
-            await pilot.pause()
-            assert called == ["solo"]
-            assert app.selected_name == "solo"
-
-    async def test_single_click_does_not_open_modal(self):
-        from utils.tui_actions import SessionActionMenu
-        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
-        async with app.run_test(size=(110, 30)) as pilot:
-            await pilot.pause()
-            app.post_message(self._click(app, 0, button=1, chain=1))
-            await pilot.pause()
-            await pilot.pause()
-            assert not isinstance(app.screen, SessionActionMenu)
-        called = []
-        app = SessionBrowser(
-            {"solo": {"HostName": "h"}}, [], {}, None,
-            connect_callback=lambda n: called.append(n))
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            lv = app.query_one("#sessions")
-            lv.index = 0
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-        assert called == ["solo"]
-        assert app.selected_name == "solo"

@@ -141,8 +141,9 @@ def preview_text(
 class _SessionItem(ListItem):
     """ListItem bound to its SessionRow (Textual 8 dropped ListItem.data).
 
-    Click grammar is handled by SessionBrowser.on_click; ListView.Selected
-    (mouse) is treated as select-only there."""
+    ListView.Selected (mouse click on a row) is select-only: it only
+    moves the highlight. Connecting is done with Enter or from the
+    right-click menu."""
 
     def __init__(self, row: SessionRow, browser: "SessionBrowser",
                  *widgets: Any) -> None:
@@ -199,7 +200,8 @@ class SessionBrowser(App[int]):
         Binding("slash", "focus_filter", "Find"),
         # priority: must pre-empt the focused ListView's own Enter
         # (select_cursor), else a second 'Selected' fires and double-fires
-        # (check_action disables it while any modal screen is on top)
+        # (check_action disables it while the action menu / log viewer is
+        # on top, so their own Enter keys still work)
         Binding("enter", "connect", "Connect", priority=True),
         Binding("p", "ping", "Ping"),
         Binding("y", "copy", "Copy Command"),
@@ -237,8 +239,8 @@ class SessionBrowser(App[int]):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            " PuTTY Sessions  ▒  Enter connect · dbl-click connect · "
-            "right-click menu · / filter",
+            " PuTTY Sessions  ▒  Enter connect · right-click menu · "
+            "/ filter",
             id="title-bar", markup=False,
         )
         yield Input(placeholder="/filter…", id="filter")
@@ -256,14 +258,14 @@ class SessionBrowser(App[int]):
         yield Static("", id="status")
         yield FARKeyBar(
             [("Enter", "Connect"), ("LMB", "Select"),
-             ("2×LMB", "Connect"), ("RMB", "Menu"), ("/", "Find"),
+             ("RMB", "Menu"), ("/", "Find"),
              ("p", "Ping"), ("y", "Copy"), ("l", "Log"), ("q", "Quit")],
             id="keybar",
         )
 
     KEYBAR_LIST = [
         ("Enter", "Connect", "connect"), ("LMB", "Select", None),
-        ("2×LMB", "Connect", None), ("RMB", "Menu", None),
+        ("RMB", "Menu", None),
         ("/", "Find", "focus_filter"), ("p", "Ping", "ping"),
         ("y", "Copy", "copy"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
     ]
@@ -394,13 +396,13 @@ class SessionBrowser(App[int]):
     async def on_list_view_selected(
         self, event: "ListView.Selected"
     ) -> None:
-        """Selected from ListView = mouse single-click (Enter is captured
-        by the app-level priority binding): treat as select-only."""
+        """Selected from ListView = mouse click on a row (Enter is
+        captured by the app-level priority binding): select-only."""
         if isinstance(event.item, _SessionItem):
             self.select_session_item(event.item)
 
     def select_session_item(self, item: "_SessionItem") -> None:
-        """Single left click: highlight the row (preview follows)."""
+        """Left click on a row: highlight it (the preview follows)."""
         lv = self.query_one("#sessions", ListView)
         try:
             lv.index = lv.children.index(item)
@@ -409,8 +411,13 @@ class SessionBrowser(App[int]):
         self._update_preview()
 
     async def on_click(self, event: "events.Click") -> None:
-        """Click grammar on a session row: single select, double connect,
-        right-click opens the action modal."""
+        """Right-click (button 3) on a session row opens the action menu.
+
+        Left clicks are handled by the ListView itself: they only move
+        the highlight (the preview follows). Connecting is done with
+        Enter or from the action menu."""
+        if event.button != 3:
+            return
         # find the session row under the cursor (walk up the widget tree)
         widget: Any = event.widget
         while widget is not None and not isinstance(widget, _SessionItem):
@@ -420,25 +427,16 @@ class SessionBrowser(App[int]):
         name = widget.row.name
         if name.startswith("__"):
             return
-        if event.button == 1:
-            self.select_session_item(widget)
-            if event.chain == 2:
-                # double click: connect
-                self.selected_name = name
-                await self.action_connect()
-            # single click: select only
-            return
-        if event.button == 3:
-            event.stop()
-            self._last_cursor = (event.screen_x, event.screen_y)
-            self.selected_name = name
-            try:
-                lv = self.query_one("#sessions", ListView)
-                lv.index = lv.children.index(widget)
-            except ValueError:
-                pass
-            self._update_preview()
-            await self.run_action_with_modal(name)
+        event.stop()
+        self._last_cursor = (event.screen_x, event.screen_y)
+        self.selected_name = name
+        try:
+            lv = self.query_one("#sessions", ListView)
+            lv.index = lv.children.index(widget)
+        except ValueError:
+            pass
+        self._update_preview()
+        await self.run_action_with_modal(name)
 
     async def run_action_with_modal(self, session_name: str) -> None:
         from .tui_actions import SessionActionMenu
