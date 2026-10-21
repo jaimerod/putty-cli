@@ -772,24 +772,44 @@ class TestBrowserApp:
             await pilot.pause()
         assert not app.is_running or app.return_value == 0
 
-    async def test_ping_action_updates_status(self):
-        """192.0.2.1 (TEST-NET-1) never answers: ✗. (A closed TCP port
-        used to fail the old probe; real ICMP ping correctly reports
-        the HOST's reachability.)"""
+    async def test_ping_action_opens_modal_and_sets_status(
+            self, monkeypatch):
+        """p: FAR ping dialog; the result mirrors into the status line
+        when the probe lands; Esc closes."""
+        import utils.tui_actions as mod
+        from utils.far_style import FARKeyBar
+        from utils.tui_actions import PingModal, _PingField
+        monkeypatch.setattr(mod, "run_ping",
+                            lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
             {"solo": {"HostName": "192.0.2.1", "PortNumber": "1"}},
             [], {}, None)
         async with app.run_test() as pilot:
             await pilot.pause()
-            lv = app.query_one("#sessions")
-            lv.index = 0
+            app.query_one("#sessions").index = 0
             await pilot.pause()
             await pilot.press("p")
             await pilot.pause()
-            assert "✗" in app.status_message  # no reply
+            modal = app.screen
+            assert isinstance(modal, PingModal)
+            assert app.query_one("#keybar", FARKeyBar).bar_text() \
+                .count("Close") == 2        # ping footer keybar
+            for _ in range(3):
+                await pilot.pause()
+            result = modal.query_one("#ping-result", _PingField)
+            assert "down" in result.value and "✗" in result.value
+            assert "✗" in app.status_message  # mirrored, persists
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.query_one("#keybar", FARKeyBar).bar_text() \
+                .count("Find") == 1         # browser footer restored
 
-    async def test_ping_jump_host_note_on_failure(self):
+    async def test_ping_jump_host_note_on_failure(self, monkeypatch):
         """A failed direct probe of a jump-hosted session says so."""
+        import utils.tui_actions as mod
+        from utils.tui_actions import PingModal, _PingField
+        monkeypatch.setattr(mod, "run_ping",
+                            lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
             {"viasolo": {"HostName": "192.0.2.9", "PortNumber": "22",
                          "ProxyMethod": "6", "ProxyHost": "gate.example.com"}},
@@ -800,8 +820,72 @@ class TestBrowserApp:
             await pilot.pause()
             await pilot.press("p")
             await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, PingModal)
+            for _ in range(3):
+                await pilot.pause()
+            note = modal.query_one("#ping-note", _PingField).value
+            assert "gate.example.com" in note
             assert "✗" in app.status_message
             assert "gate.example.com" in app.status_message
+
+    async def test_ping_q_closes_not_quits(self, monkeypatch):
+        """q inside the ping dialog closes the dialog, not the app."""
+        import utils.tui_actions as mod
+        from utils.tui_actions import PingModal
+        monkeypatch.setattr(mod, "run_ping", lambda *a: (True, "x"))
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            assert isinstance(app.screen, PingModal)
+            await pilot.press("q")
+            await pilot.pause()
+            assert not isinstance(app.screen, PingModal)   # dialog closed
+            assert not app.is_running or app.return_value is None \
+                or app.return_value >= 0   # app still alive
+
+    async def test_ping_p_gated_inside_the_ping_dialog(self, monkeypatch):
+        """p must not stack ping dialogs on top of each other."""
+        import utils.tui_actions as mod
+        from utils.tui_actions import PingModal
+        monkeypatch.setattr(mod, "run_ping", lambda *a: (True, "x"))
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            assert isinstance(app.screen, PingModal)
+            assert app.check_action("ping", ()) is False
+            await pilot.press("p")            # must not double-open
+            await pilot.pause()
+            assert len(app.screen_stack) == 2
+
+    async def test_ping_note_empty_for_success(self, monkeypatch):
+        import utils.tui_actions as mod
+        from utils.tui_actions import _PingField
+        monkeypatch.setattr(mod, "run_ping",
+                            lambda h, p: (True, f"{h}: 8.1 ms"))
+        app = SessionBrowser(
+            {"viasolo": {"HostName": "h", "ProxyMethod": "6",
+                         "ProxyHost": "gate.example.com"}}, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            for _ in range(3):
+                await pilot.pause()
+            assert not app.screen.query_one("#ping-note",
+                                            _PingField).value
+            assert "8.1 ms" in app.screen.query_one(
+                "#ping-result", _PingField).value
 
     async def test_slash_focuses_filter_enter_connects(self):
         called = []
@@ -963,11 +1047,15 @@ class TestSessionActionMenu:
             assert called == ["solo"], f"called={called}"
             assert app.selected_name == "solo"
 
-    async def test_right_click_ping_dispatch(self):
-        """right-click -> down/enter to Ping -> status bar shows result."""
+    async def test_right_click_ping_dispatch(self, monkeypatch):
+        """right-click -> down/enter to Ping -> the FAR ping dialog."""
+        import utils.tui_actions as mod
+        from utils.tui_actions import PingModal, _PingField
+        monkeypatch.setattr(mod, "run_ping",
+                            lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
             {"solo": {"HostName": "192.0.2.1", "PortNumber": "1"}},
-            [], {}, None)
+            [], {}, None, connect_callback=lambda n: None)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause()
             app.post_message(self._click_on_row(app, 0))
@@ -975,9 +1063,12 @@ class TestSessionActionMenu:
             await pilot.pause()
             await pilot.press("down")   # Connect -> Ping
             await pilot.press("enter")
-            await pilot.pause()
-            await pilot.pause()
-            assert "✗" in app.status_message  # 192.0.2.1:1 refused
+            for _ in range(4):
+                await pilot.pause()
+            assert isinstance(app.screen, PingModal)
+            result = app.screen.query_one("#ping-result", _PingField)
+            assert "✗" in result.value and "down" in result.value
+            assert "✗" in app.status_message           # mirrored
 
     async def test_click_outside_menu_closes(self):
         from utils.tui_actions import SessionActionMenu
@@ -1050,8 +1141,10 @@ class TestSessionActionMenu:
             assert text.strip()  # non-empty shadow content
             assert "lo" in text or "OTHER" in text  # covered rows echo
 
-    async def test_menu_shadow_empty_without_underlying(self):
-        """Direct push (no underlying screen passed) -> plain shadow."""
+    async def test_menu_shadow_without_underlying_falls_back_to_browser(self):
+        """Direct push (no underlying screen passed): the echo still
+        snapshots the browser below on the stack - the copy always
+        matches the visible background."""
         from utils.tui_actions import SessionActionMenu
         app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
@@ -1060,7 +1153,7 @@ class TestSessionActionMenu:
             for _ in range(5):
                 await pilot.pause()
             shadow = menu.query_one("#ctx-shadow")
-            assert str(shadow.render()).strip() == ""
+            assert "═" in str(shadow.render())   # echoes covered frames
 
     async def test_menu_shadow_far_styling(self):
         """FAR-console shadow: opaque black slab (no alpha) with the

@@ -1,4 +1,5 @@
 """Action helpers used by the TUI (kept importable without a running app)."""
+import asyncio
 import os
 import re
 import shutil
@@ -174,6 +175,21 @@ def _region_text(screen: Any, x: int, y: int,
     return ["".join(row) for row in grid]
 
 
+def underlying_browser_screen(modal: Any) -> Any:
+    """The topmost NON-modal screen below `modal` (e.g. the browser).
+
+    Stacks can nest (menu -> ping -> edit); the shadow's 'copy' must
+    always come from the actual background UI, never from another
+    dialog."""
+    stack = getattr(modal.app, "screen_stack", None) or []
+    for screen in reversed(stack):
+        if screen is modal:
+            continue
+        if not isinstance(screen, ModalScreen):
+            return screen
+    return None
+
+
 def _sync_far_shadow(box: Any, shadow: Any, underlying: Any,
                      offset: Tuple[int, int] = (2, 1)) -> None:
     """FAR DOS drop shadow for a popup box: opaque black slab (no
@@ -335,7 +351,8 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
             shadow = self.query_one("#ctx-shadow", Static)
         except Exception:  # noqa: BLE001 - widgets not mounted yet
             return
-        _sync_far_shadow(box, shadow, self._underlying)
+        _sync_far_shadow(box, shadow, self._underlying or
+                         underlying_browser_screen(self))
 
     def _render_items(self) -> None:
         """(Re)apply the -selected class on exactly one option row."""
@@ -614,8 +631,7 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
     @property
     def _underlying_screen(self) -> Any:
         """Screen stack entry below this modal (the browser)."""
-        stack = self.app.screen_stack if self.app else []
-        return stack[-2] if len(stack) >= 2 else None
+        return underlying_browser_screen(self)
 
     def on_input_submitted(self, event: "Input.Submitted") -> None:
         """Enter inside a field moves to the next control (fields then
@@ -690,6 +706,165 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
         if changes is None:
             return
         self.dismiss(changes)
+
+
+class _PingField(Static, can_focus=False):
+    """Read-only field for the ping dialog (styled Static with a value
+    property; the TUI's Input has no read-only mode)."""
+
+    def __init__(self, value: str = "", **kwargs: Any) -> None:
+        super().__init__(value or "", classes="ping-value", markup=False,
+                         **kwargs)
+
+    @property
+    def value(self) -> str:
+        return str(self.content)
+
+    @value.setter
+    def value(self, text: str) -> None:
+        self.update(text)
+
+
+class PingModal(ModalScreen[None]):
+    """FAR dialog probing the highlighted session's host.
+
+    Opens instantly ('checking…'), runs the real probe in a worker
+    thread (ICMP ping with latency, TCP fallback), then fills the
+    Result/Note fields and mirrors the outcome into the browser's
+    status line. Esc/q closes. A jump-hosted session's failed direct
+    probe says so (it cannot see through the tunnel).
+    """
+
+    PROGRESS = "checking…"
+
+    def __init__(self, session_display: str, host: str, port: str,
+                 jump_host: str = "", on_complete: Any = None,
+                 **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._session = session_display
+        self._host = host
+        self._port = port or "22"
+        self._jump_host = jump_host.strip()
+        self._on_complete = on_complete or (lambda *a: None)
+
+    BINDINGS = [
+        ("escape", "cancel", "Close"),
+        ("q", "cancel", "Close"),
+    ]
+
+    DEFAULT_CSS = f"""
+    PingModal {{ background: transparent; }}
+
+    #ping-shadow {{
+        position: absolute;
+        width: 0;
+        height: 0;
+        background: {ACTIVE_PALETTE.shadow};
+        color: {ACTIVE_PALETTE.dim};
+        layer: shadow;
+    }}
+
+    #ping-box {{
+        layout: vertical;
+        background: {ACTIVE_PALETTE.popup_bg};
+        border: round {ACTIVE_PALETTE.frame};
+        width: 46;
+        height: auto;
+        padding: 0;
+        layer: window;
+    }}
+
+    #ping-title {{
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
+        text-style: bold;
+        padding: 0 2;
+        height: 1;
+        width: auto;
+    }}
+
+    .ping-row {{
+        height: 1;
+        width: 100%;
+        layout: horizontal;
+    }}
+    .ping-label {{
+        width: 12;
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
+        padding: 0 0 0 2;
+        height: 1;
+    }}
+    #ping-result, #ping-note, .ping-value {{
+        border: none;
+        background: {ACTIVE_PALETTE.input_bg};
+        color: {ACTIVE_PALETTE.input_fg};
+        height: 1;
+        width: 1fr;
+    }}
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="ping-shadow", markup=False)
+        with Vertical(id="ping-box"):
+            yield Label(self._session, id="ping-title")
+            with Horizontal(classes="ping-row"):
+                yield Static("Host", classes="ping-label", markup=False)
+                yield _PingField(value=self._host, id="ping-host")
+            with Horizontal(classes="ping-row"):
+                yield Static("Port", classes="ping-label", markup=False)
+                yield _PingField(value=self._port, id="ping-port")
+            with Horizontal(classes="ping-row"):
+                yield Static("Result", classes="ping-label", markup=False)
+                yield _PingField(value=self.PROGRESS, id="ping-result")
+            with Horizontal(classes="ping-row"):
+                yield Static("Note", classes="ping-label", markup=False)
+                yield _PingField(value="", id="ping-note")
+
+    def on_mount(self) -> None:
+        self._center_box()
+        self.call_after_refresh(self._sync_shadow)
+        self.run_worker(self._probe(), exclusive=True)
+
+    def _center_box(self) -> None:
+        size = self.size
+        self.query_one("#ping-box", Vertical).styles.offset = (
+            max(0, (size.width - 46) // 2),
+            max(0, (size.height - 10) // 2),
+        )
+
+    def _sync_shadow(self) -> None:
+        try:
+            box = self.query_one("#ping-box", Vertical)
+            shadow = self.query_one("#ping-shadow", Static)
+        except Exception:  # noqa: BLE001 - widgets not mounted yet
+            return
+        _sync_far_shadow(box, shadow, self._underlying_screen)
+
+    @property
+    def _underlying_screen(self) -> Any:
+        """The browser (topmost non-modal screen below this modal)."""
+        return underlying_browser_screen(self)
+
+    async def _probe(self) -> None:
+        # run_ping is sync (subprocess + socket): keep the UI live by
+        # offloading to a thread
+        ok, msg = await asyncio.to_thread(
+            run_ping, self._host, self._port)
+        self.query_one("#ping-result", _PingField).value = \
+            ("✓ " if ok else "✗ ") + msg
+        note = ""
+        if not ok and self._jump_host:
+            note = (f"direct probe; connects via "
+                    f"{self._jump_host}")
+        self.query_one("#ping-note", _PingField).value = note
+        self._on_complete(ok, msg)
+        # the browser re-rendered behind the dialog (status line/keybar
+        # changed): refresh the shadow copy so it never lags the raster
+        self.call_after_refresh(self._sync_shadow)
+
+    async def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class LogViewerScreen(Screen):

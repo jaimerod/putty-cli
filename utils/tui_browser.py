@@ -363,6 +363,9 @@ class SessionBrowser(App[int]):
         ("Tab", "Next", None), ("Enter", "OK", None),
         ("Esc", "Cancel", None),
     ]
+    KEYBAR_PING = [
+        ("Esc", "Close", None), ("q", "Close", None),
+    ]
     KEYBAR_LOG = [
         ("/", "Search", None), ("n", "Next", None), ("N", "Prev", None),
         ("Esc", "Back", None),
@@ -670,12 +673,13 @@ class SessionBrowser(App[int]):
 
     def check_action(self, action: str, parameters: tuple) -> bool:
         """Disable bindings while a modal/log screen is active so the
-        modal's own widgets and keys keep working (also keeps e/Enter
-        from opening dialogs underneath or behind an open menu)."""
-        if action in ("connect", "edit"):
-            from .tui_actions import EditSessionModal, LogViewerScreen, SessionActionMenu
+        modal's own widgets and keys keep working (also keeps Enter/e/p
+        from opening dialogs underneath or behind an open screen)."""
+        if action in ("connect", "edit", "ping"):
+            from .tui_actions import EditSessionModal, LogViewerScreen, PingModal, SessionActionMenu
             return type(self.screen) not in (
-                SessionActionMenu, LogViewerScreen, EditSessionModal)
+                SessionActionMenu, LogViewerScreen, EditSessionModal,
+                PingModal)
         return True
 
     async def action_quit(self) -> None:
@@ -709,24 +713,44 @@ class SessionBrowser(App[int]):
         self._update_status()
 
     async def action_ping(self) -> None:
+        """p / menu Ping: FAR ping dialog (probe worker fills results)."""
         sel = self._selected_session()
         if sel is None:
+            self.status_message = "no session highlighted"
+            self._update_status()
             return
         name, session = sel
         host = session.get("HostName", "").strip()
         port = session.get("PortNumber", "22")
         if not host:
             self.status_message = "no hostname to ping"
-        else:
-            from .tui_actions import run_ping
-            ok, msg = run_ping(host, port)
-            # a jump-hosted session may be unreachable to a direct probe
+            self._update_status()
+            return
+        from .tui_actions import PingModal
+        jump = session.get("ProxyHost", "").strip() \
+            if session.get("ProxyMethod", "0").strip() == "6" else ""
+        self._set_keybar(self.KEYBAR_PING)
+        modal = PingModal(
+            unquote_display(name), host, port, jump_host=jump,
+            on_complete=self._on_ping_complete(session))
+
+        def on_result(_r: object) -> None:
+            self._set_keybar(self.KEYBAR_LIST)
+
+        self.push_screen(modal, callback=on_result)
+
+    def _on_ping_complete(self, session: Dict[str, Any]) -> Any:
+        """Mirror the probe result into the status line (persists after
+        the dialog closes)."""
+        def complete(ok: bool, msg: str) -> None:
             note = ""
-            if not ok and session.get("ProxyMethod", "0").strip() == "6" \
-                    and session.get("ProxyHost", "").strip():
-                note = f" (direct probe; connects via {session['ProxyHost']})"
+            if not ok and session.get("ProxyMethod", "0").strip() == "6":
+                jump = session.get("ProxyHost", "").strip()
+                if jump:
+                    note = f" (direct probe; connects via {jump})"
             self.status_message = ("✓ " if ok else "✗ ") + msg + note
-        self._update_status()
+            self._update_status()
+        return complete
 
     async def action_copy(self) -> None:
         sel = self._selected_session()
