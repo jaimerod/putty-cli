@@ -1,9 +1,10 @@
 """Textual TUI session browser for putty-cli.
 
-A persistent alternative to the simple-term_menu flow: filter box,
-session list with tag grouping and recents metadata, live preview of
-the ssh command for the highlighted session, and an action menu
-(Connect via suspend() TTY handoff to tmux, Copy, Ping).
+A persistent alternative to the simple-term_menu flow: filter box, a
+left column with two stacked panes (recent connections above, all
+connections below, FAR panel style), live preview of the ssh command
+for the highlighted session, and an action menu (Connect via suspend()
+TTY handoff to tmux, Copy, Ping).
 """
 import shlex
 from pathlib import Path
@@ -49,38 +50,38 @@ class SessionRow:
         return f"SessionRow({self.name!r})"
 
 
-def build_rows(
+def build_recent_rows(
     usable: Dict[str, Dict[str, Any]],
     recent_names: List[str],
     recent_entries: Optional[Dict[str, Dict[str, object]]],
+) -> List[SessionRow]:
+    """RECENT pane rows: recently connected sessions, newest first,
+    carrying the relative-time / failure metadata."""
+    return [
+        _row(name, usable[name], recent_entries)
+        for name in recent_names if name in usable
+    ]
+
+
+def build_all_rows(
+    usable: Dict[str, Dict[str, Any]],
     group_by_tag: bool = True,
 ) -> List[SessionRow]:
-    """Rows in display order: recents (with metadata), then tag groups."""
-    rows: List[SessionRow] = []
-    if recent_names:
-        for name in recent_names:
-            if name in usable:
-                rows.append(_row(name, usable[name], recent_entries))
-        rows.append(SessionRow("__sep__", "─" * 60, None))
-
-    remaining = [n for n in sorted(
-        usable.keys(),
-        key=lambda n: unquote_display(n).lower(),
-    ) if n not in recent_names]
-
+    """ALL pane rows: every session (recents included), tag-grouped."""
+    names = sorted(usable.keys(), key=lambda n: unquote_display(n).lower())
     if not group_by_tag:
-        rows.extend(_row(n, usable[n], None) for n in remaining)
-        return rows
+        return [_row(n, usable[n], None) for n in names]
 
     grouped: Dict[str, List[str]] = {}
     ungrouped: List[str] = []
-    for name in remaining:
+    for name in names:
         tag = session_tag(name)
         if tag:
             grouped.setdefault(tag, []).append(name)
         else:
             ungrouped.append(name)
 
+    rows: List[SessionRow] = []
     for tag in sorted(grouped):
         rows.append(SessionRow(f"__hdr__:{tag}",
                                f"── {tag.upper()} " + "─" * 20, None))
@@ -152,6 +153,15 @@ class _SessionItem(ListItem):
         self.browser = browser
 
 
+class _PaneList(ListView):
+    """One of the two session panes.
+
+    Tab jumps straight to the other pane (FAR panel style) instead of
+    walking the focus chain; / reaches the filter."""
+
+    BINDINGS = [Binding("tab", "app.next_pane", "Pane", show=False)]
+
+
 async def app_push_screen(
     app: "SessionBrowser", modal: Any, session_name: str
 ) -> None:
@@ -182,6 +192,8 @@ class SessionBrowser(App[int]):
     #title-bar { dock: top; height: 1; color: $secondary;
                  background: $background; padding: 0 1; }
     #list-col { width: 2fr; }
+    #recent-win { height: 40%; }
+    #all-win { height: 1fr; }
     #preview-col {
         width: 1fr;
         padding: 0 1;
@@ -227,8 +239,12 @@ class SessionBrowser(App[int]):
         self.connect_callback = connect_callback  # runs after suspend()
         self.selected_name: Optional[str] = None
         self._last_cursor: tuple[int, int] = (0, 0)
+        # two panes: #recents (top) and #sessions = the ALL pane (bottom)
+        self.recent_rows: List[SessionRow] = []
         self.rows: List[SessionRow] = []
+        self.filtered_recent_rows: List[SessionRow] = []
         self.filtered_rows: List[SessionRow] = []
+        self._active_list_id = "sessions"
         self.status_message = ""
 
     KEYBAR = [
@@ -239,8 +255,8 @@ class SessionBrowser(App[int]):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            " PuTTY Sessions  ▒  Enter connect · right-click menu · "
-            "/ filter",
+            " PuTTY Sessions  ▒  Enter connect · Tab panes · right-click "
+            "menu · / filter",
             id="title-bar", markup=False,
         )
         yield Input(placeholder="/filter…", id="filter")
@@ -248,8 +264,14 @@ class SessionBrowser(App[int]):
             # far-shadow mounts BEFORE its window -> renders underneath
             with Vertical(id="list-col"):
                 yield FarShadow()
-                with FarWindow(id="list-win"):
-                    yield ListView(id="sessions")
+                with FarWindow(id="recent-win"):
+                    yield Static("RECENT CONNECTIONS",
+                                 classes="far-window-title", markup=False)
+                    yield _PaneList(id="recents")
+                with FarWindow(id="all-win"):
+                    yield Static("ALL CONNECTIONS",
+                                 classes="far-window-title", markup=False)
+                    yield _PaneList(id="sessions")
             with Vertical(id="preview-col"):
                 yield FarShadow()
                 with FarWindow(id="preview-win"):
@@ -257,17 +279,17 @@ class SessionBrowser(App[int]):
                                  markup=True)
         yield Static("", id="status")
         yield FARKeyBar(
-            [("Enter", "Connect"), ("LMB", "Select"),
-             ("RMB", "Menu"), ("/", "Find"),
+            [("Enter", "Connect"), ("RMB", "Menu"),
+             ("/", "Find"), ("Tab", "Pane"),
              ("p", "Ping"), ("y", "Copy"), ("l", "Log"), ("q", "Quit")],
             id="keybar",
         )
 
     KEYBAR_LIST = [
-        ("Enter", "Connect", "connect"), ("LMB", "Select", None),
-        ("RMB", "Menu", None),
-        ("/", "Find", "focus_filter"), ("p", "Ping", "ping"),
-        ("y", "Copy", "copy"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
+        ("Enter", "Connect", "connect"), ("RMB", "Menu", None),
+        ("/", "Find", "focus_filter"), ("Tab", "Pane", "next_pane"),
+        ("p", "Ping", "ping"), ("y", "Copy", "copy"), ("l", "Log", "logs"),
+        ("q", "Quit", "quit"),
     ]
     KEYBAR_FILTER = [
         ("Enter", "Pick+Connect", None), ("Esc", "Back to list", "blur_filter"),
@@ -291,19 +313,32 @@ class SessionBrowser(App[int]):
     def on_mount(self) -> None:
         install_far_theme(self)
         self.screen.add_class("browser-bg")
-        self.rows = build_rows(
-            self.usable, self.recent_names, self.recent_entries,
-            self.group_by_tag)
+        self.recent_rows = build_recent_rows(
+            self.usable, self.recent_names, self.recent_entries)
+        self.rows = build_all_rows(self.usable, self.group_by_tag)
         self._refresh_list()
         self._suspendable = True  # probed at action time (headless pilots)
-        self.query_one("#sessions", ListView).focus()
+        # FAR opens on the active panel: recent connections if there are
+        # any, else the all-connections pane
+        self.query_one(
+            "#recents" if self.recent_rows else "#sessions", ListView
+        ).focus()
 
     async def action_focus_filter(self) -> None:
         self.query_one("#filter", Input).focus()
         self._set_keybar(self.KEYBAR_FILTER)
 
+    def action_next_pane(self) -> None:
+        """Tab: jump between the recent pane and the all pane."""
+        other_id = ("sessions" if self._active_list_id == "recents"
+                    else "recents")
+        try:
+            self.query_one(f"#{other_id}", ListView).focus()
+        except Exception:  # nosec B110 - pane not mounted
+            pass
+
     async def action_blur_filter(self) -> None:
-        self.query_one("#sessions", ListView).focus()
+        self.query_one(f"#{self._active_list_id}", ListView).focus()
         self._set_keybar(self.KEYBAR_LIST)
 
     async def on_key_bar_clicked(
@@ -315,16 +350,13 @@ class SessionBrowser(App[int]):
             await self.run_action(act)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        """Context-sensitive footer: filter vs session list hotkeys."""
+        """Context-sensitive footer: filter vs session pane hotkeys."""
         widget = event.widget
-        try:
-            sessions = self.query_one("#sessions", ListView)
-        except Exception:  # noqa: BLE001 - not mounted yet
-            return
-        if isinstance(widget, Input) and widget.id == "filter":
-            self._set_keybar(self.KEYBAR_FILTER)
-        elif widget is sessions:
+        if isinstance(widget, ListView):
+            self._active_list_id = widget.id or "sessions"
             self._set_keybar(self.KEYBAR_LIST)
+        elif isinstance(widget, Input) and widget.id == "filter":
+            self._set_keybar(self.KEYBAR_FILTER)
 
     def on_input_changed(self, event: "Input.Changed") -> None:
         if event.input.id == "filter":
@@ -334,46 +366,52 @@ class SessionBrowser(App[int]):
 
     async def on_input_submitted(self, event: "Input.Submitted") -> None:
         if event.input.id == "filter":
-            self.query_one("#sessions", ListView).focus()
+            self.query_one(f"#{self._active_list_id}", ListView).focus()
             await self.action_connect()
 
-    def _refresh_list(self) -> None:
-        list_view = self.query_one("#sessions", ListView)
-        filter_text = self.query_one("#filter", Input).value.lower().strip()
-        self.filtered_rows = [
-            r for r in self.rows
-            if r.tag is None and r.name.startswith("__")  # headers/seps
-            or filter_text in r.display.lower()
-            or filter_text in unquote_display(r.name).lower()
-        ]
-        if filter_text:
-            # filtering hides headers/separators entirely
-            self.filtered_rows = [r for r in self.rows
-                                  if not r.name.startswith("__")
-                                  and (filter_text in r.display.lower()
-                                       or filter_text in unquote_display(r.name).lower())]
+    def _filter_rows(self, rows: List[SessionRow],
+                     text: str) -> List[SessionRow]:
+        if not text:
+            return list(rows)
+        # filtering hides headers/separators entirely
+        return [r for r in rows
+                if not r.name.startswith("__")
+                and (text in r.display.lower()
+                     or text in unquote_display(r.name).lower())]
+
+    def _fill_list(self, list_view: ListView, rows: List[SessionRow]) -> None:
         list_view.clear()
-        for row in self.filtered_rows:
+        for row in rows:
             selectable = not row.name.startswith("__")
             item = _SessionItem(row, self, Static(row.display, markup=False))
             if not selectable:
                 item.add_class("header")
                 item.disabled = True
             list_view.append(item)
-        if self.filtered_rows:
+        if rows:
             # Land on the first selectable row: index 0 may be a disabled
             # header/separator, and ListView won't highlight past it.
             first_selectable = next(
-                (i for i, r in enumerate(self.filtered_rows)
+                (i for i, r in enumerate(rows)
                  if not r.name.startswith("__")),
                 None,
             )
             if first_selectable is None:
                 list_view.index = 0  # only headers visible (e.g. stale filter)
             elif list_view.index is None or \
-                    not 0 <= list_view.index < len(self.filtered_rows) or \
-                    self.filtered_rows[list_view.index].name.startswith("__"):
+                    not 0 <= list_view.index < len(rows) or \
+                    rows[list_view.index].name.startswith("__"):
                 list_view.index = first_selectable
+
+    def _refresh_list(self) -> None:
+        filter_text = self.query_one("#filter", Input).value.lower().strip()
+        self.filtered_recent_rows = self._filter_rows(
+            self.recent_rows, filter_text)
+        self.filtered_rows = self._filter_rows(self.rows, filter_text)
+        self._fill_list(self.query_one("#recents", ListView),
+                        self.filtered_recent_rows)
+        self._fill_list(self.query_one("#sessions", ListView),
+                        self.filtered_rows)
         self._update_preview()
         self._update_status()
 
@@ -385,13 +423,29 @@ class SessionBrowser(App[int]):
             msg += f"  │  {self.status_message}"
         self.query_one("#status", Static).update(msg)
 
+    def _pane_rows(self, list_id: str) -> List[SessionRow]:
+        """Filtered rows of a pane, by widget id."""
+        return (self.filtered_recent_rows if list_id == "recents"
+                else self.filtered_rows)
+
     def _current_row(self) -> Optional[SessionRow]:
-        lv = self.query_one("#sessions", ListView)
-        if lv.index is None or not self.filtered_rows:
+        try:
+            lv = self.query_one(f"#{self._active_list_id}", ListView)
+        except Exception:  # noqa: BLE001 - not mounted yet
             return None
-        if 0 <= lv.index < len(self.filtered_rows):
-            return self.filtered_rows[lv.index]
+        rows = self._pane_rows(self._active_list_id)
+        if lv.index is None or not rows:
+            return None
+        if 0 <= lv.index < len(rows):
+            return rows[lv.index]
         return None
+
+    def _pane_of_item(self, item: Any) -> Optional[ListView]:
+        """The ListView pane containing the given item (walk ancestors)."""
+        parent: Any = item.parent
+        while parent is not None and not isinstance(parent, ListView):
+            parent = parent.parent
+        return parent
 
     async def on_list_view_selected(
         self, event: "ListView.Selected"
@@ -403,11 +457,13 @@ class SessionBrowser(App[int]):
 
     def select_session_item(self, item: "_SessionItem") -> None:
         """Left click on a row: highlight it (the preview follows)."""
-        lv = self.query_one("#sessions", ListView)
-        try:
-            lv.index = lv.children.index(item)
-        except ValueError:
-            pass
+        pane = self._pane_of_item(item)
+        if pane is not None:
+            try:
+                pane.index = pane.children.index(item)
+            except ValueError:
+                pass
+            self._active_list_id = pane.id or "sessions"
         self._update_preview()
 
     async def on_click(self, event: "events.Click") -> None:
@@ -430,11 +486,13 @@ class SessionBrowser(App[int]):
         event.stop()
         self._last_cursor = (event.screen_x, event.screen_y)
         self.selected_name = name
-        try:
-            lv = self.query_one("#sessions", ListView)
-            lv.index = lv.children.index(widget)
-        except ValueError:
-            pass
+        pane = self._pane_of_item(widget)
+        if pane is not None:
+            try:
+                pane.index = pane.children.index(widget)
+            except ValueError:
+                pass
+            self._active_list_id = pane.id or "sessions"
         self._update_preview()
         await self.run_action_with_modal(name)
 

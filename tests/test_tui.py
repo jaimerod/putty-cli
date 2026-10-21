@@ -15,7 +15,7 @@ from textual.color import Color
 
 import putty
 from utils.tui_actions import run_ping
-from utils.tui_browser import SessionBrowser, build_rows, preview_text
+from utils.tui_browser import SessionBrowser, build_all_rows, build_recent_rows, preview_text
 
 USABLE = {
     "prod:web-1": {"HostName": "a.example.com", "UserName": "ops",
@@ -266,25 +266,190 @@ class TestTuiFallback:
 
 
 class TestBuildRows:
-    def test_order_tags_and_other(self):
-        rows = build_rows(USABLE, [], None)
+    def test_all_rows_tags_and_other(self):
+        rows = build_all_rows(USABLE)
         names = [r.name for r in rows if not r.name.startswith("__")]
         assert names == ["prod:web-1", "prod:web-2", "staging:web", "solo"]
         headers = [r.display for r in rows if r.name.startswith("__hdr__")]
         assert any("PROD" in h for h in headers)
         assert any("OTHER" in h for h in headers)
 
-    def test_recents_first_with_metadata(self):
+    def test_all_rows_include_recent_sessions(self):
+        """The ALL pane lists everything; recents get their own pane."""
+        rows = build_all_rows(USABLE)
+        names = [r.name for r in rows if not r.name.startswith("__")]
+        assert "prod:web-1" in names
+
+    def test_recent_rows_metadata(self):
         import time
         entries = {"prod:web-1": {"ts": int(time.time()) - 7200, "exit": 255}}
-        rows = build_rows(USABLE, ["prod:web-1"], entries)
-        first = rows[0]
-        assert first.name == "prod:web-1"
-        assert "2h ago" in first.display and "✗" in first.display
+        # unknown sessions are skipped; recents carry the metadata suffix
+        rows = build_recent_rows(USABLE, ["prod:web-1", "ghost"], entries)
+        assert [r.name for r in rows] == ["prod:web-1"]
+        assert "2h ago" in rows[0].display and "✗" in rows[0].display
 
     def test_flat_mode(self):
-        rows = build_rows(USABLE, [], None, group_by_tag=False)
+        rows = build_all_rows(USABLE, group_by_tag=False)
         assert not any(r.name.startswith("__hdr__") for r in rows)
+
+
+class TestPanes:
+    """Left column: RECENT pane stacked above the ALL pane (FAR style)."""
+
+    def _click_on_row(self, app, row_index, pane="#sessions", chain=1):
+        """Craft a right-click event targeted at a row in either pane."""
+        from textual import events
+
+        lv = app.query_one(pane)
+        item = lv.children[row_index]
+        region = item.region
+        return events.Click(
+            widget=item,
+            x=region.x + 1, y=region.y + 1,
+            delta_x=0, delta_y=0,
+            button=3, chain=chain, shift=False, meta=False, ctrl=False,
+            screen_x=region.x + 1, screen_y=region.y + 1,
+            style=None,
+        )
+
+    async def test_panes_stacked_recent_above_all(self):
+        app = SessionBrowser(USABLE, ["prod:web-1"], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            top = app.query_one("#recent-win").region
+            bottom = app.query_one("#all-win").region
+            assert top.y < bottom.y
+            assert top.x == bottom.x and top.width == bottom.width
+
+    async def test_panes_have_titles(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            for win_id, label in (("#recent-win", "RECENT CONNECTIONS"),
+                                  ("#all-win", "ALL CONNECTIONS")):
+                title = app.query_one(f"{win_id} .far-window-title")
+                assert str(title.render()) == label
+
+    async def test_recent_pane_rows_with_metadata(self):
+        import time
+        entries = {"prod:web-1": {"ts": int(time.time()) - 300, "exit": 0}}
+        app = SessionBrowser(USABLE, ["prod:web-1"], entries, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            items = app.query_one("#recents").children
+            assert [c.row.name for c in items] == ["prod:web-1"]
+            assert "5m ago" in items[0].row.display
+
+    async def test_all_pane_lists_everything(self):
+        app = SessionBrowser(USABLE, ["prod:web-1"], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            names = [c.row.name for c in app.query_one("#sessions").children]
+            sessions = [r.name for r in build_all_rows(USABLE)
+                        if not r.name.startswith("__")]
+            # every session is listed exactly once (recents included)
+            assert sorted(n for n in names if not n.startswith("__")) \
+                == sorted(sessions)
+            assert sorted(n for n in names if not n.startswith("__")) \
+                == sorted(USABLE)
+
+    async def test_filter_applies_to_both_panes(self):
+        app = SessionBrowser(USABLE, ["prod:web-1", "solo"], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            filt = app.query_one("#filter")
+            filt.value = "prod"
+            await pilot.pause()
+            assert [c.row.name for c in app.query_one("#recents").children] \
+                == ["prod:web-1"]
+            assert [c.row.name for c in app.query_one("#sessions").children] \
+                == ["prod:web-1", "prod:web-2"]
+            filt.value = ""
+            await pilot.pause()
+            assert len(app.query_one("#recents").children) == 2
+
+    async def test_tab_toggles_between_panes(self):
+        app = SessionBrowser(USABLE, ["prod:web-1"], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            # recents exist -> browser opens on the recent pane
+            assert app.query_one("*:focus").id == "recents"
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.query_one("*:focus").id == "sessions"
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.query_one("*:focus").id == "recents"
+
+    async def test_keybar_tab_slot_switches_pane(self):
+        from utils.far_style import KeyBarSlot
+
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+
+            def tab_click():
+                slot = next(s for s in app.query(KeyBarSlot)
+                            if s.key == "Tab")
+                return pilot.click(slot)
+
+            await tab_click()
+            await pilot.pause()
+            assert app.query_one("*:focus").id == "recents"
+            await tab_click()  # re-query: focus swap refreshes the bar
+            await pilot.pause()
+            assert app.query_one("*:focus").id == "sessions"
+
+    async def test_connect_from_recent_pane(self):
+        called = []
+        app = SessionBrowser(
+            {"solo": {"HostName": "h"},
+             "prod:web-1": {"HostName": "a.example.com"}},
+            ["prod:web-1"], {}, None,
+            connect_callback=lambda n: called.append(n))
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")  # recents pane is focused on mount
+            await pilot.pause()
+        assert called == ["prod:web-1"]
+        assert app.selected_name == "prod:web-1"
+
+    async def test_right_click_in_recent_pane_opens_menu(self):
+        from utils.tui_actions import SessionActionMenu
+
+        app = SessionBrowser(
+            {"prod:web-1": {"HostName": "a.example.com"}},
+            ["prod:web-1"], {}, None,
+            connect_callback=lambda n: None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.post_message(self._click_on_row(app, 0, pane="#recents"))
+            await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)
+            assert app.selected_name == "prod:web-1"
+
+    async def test_enter_in_all_pane_connects_all_pane_row(self):
+        called = []
+        app = SessionBrowser(
+            {"prod:web-1": {"HostName": "a"}, "solo": {"HostName": "h"}},
+            ["prod:web-1"], {}, None,
+            connect_callback=lambda n: called.append(n))
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            sessions = app.query_one("#sessions")
+            sessions.focus()
+            await pilot.pause()
+            await pilot.press("enter")  # first selectable row: prod:web-1
+            await pilot.pause()
+        assert called == ["prod:web-1"]
+
+    async def test_status_counts_all_pane_once(self):
+        """Sessions listed in the recents pane must not inflate counts."""
+        app = SessionBrowser(USABLE, ["prod:web-1"], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            assert "4/4 sessions" in str(app.query_one("#status").render())
 
 
 class TestPreview:
@@ -316,7 +481,7 @@ class TestBrowserApp:
         async with app.run_test() as pilot:
             await pilot.pause()
             lv = app.query_one("#sessions")
-            expected = len([r for r in build_rows(USABLE, [], None)])
+            expected = len([r for r in build_all_rows(USABLE)])
             assert len(lv.children) == expected
             assert app.query_one("#preview")
 

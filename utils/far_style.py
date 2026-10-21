@@ -226,7 +226,10 @@ class FARKeyBar(Horizontal):
             pass
 
     def set_entries(self, entries: Sequence[Tuple]) -> None:
-        self._entries = list(entries)
+        new = [tuple(e) if not isinstance(e, tuple) else e for e in entries]
+        if new == self._entries:  # same bar: avoid re-mounting the slots
+            return
+        self._entries = new
         self._render_slots()
 
     def set_status(self, status: str) -> None:

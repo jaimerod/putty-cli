@@ -63,11 +63,13 @@ putty-cli --reg FILE           use a specific .reg file
 `putty-cli` with no flags runs the Textual session browser:
 
 - filter box (`/` to focus, type to narrow, Enter connects the current)
-- session list with tag groups and recents metadata (`2h ago ✗`)
+- **left column, two stacked panes** (FAR panel style): RECENT
+  CONNECTIONS on top (recents with `2h ago` / `✗` metadata), ALL
+  CONNECTIONS below (every session, tag-grouped); `Tab` toggles panes
 - **live preview pane**: the ssh command for the highlighted session,
   built without side effects (no puttygen run, no logs written)
-- keys: Enter connect · single click select · double click connect ·
-  right-click context menu · p ping · y copy command · l logs · q quit
+- keys: Enter connect · click select · Tab panes · right-click context
+  menu · p ping · y copy command · l logs · q quit
 - right-click opens a cursor-positioned context menu (arrows navigate,
   Enter executes, Esc or clicking outside closes)
 - connect suspends the UI and hands the terminal to tmux; the browser
