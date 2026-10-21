@@ -31,6 +31,7 @@ USABLE = {
 
 class TestTuiActions:
     def test_run_ping_reachable(self):
+        import re
         import socket
         srv = socket.socket()
         srv.bind(("127.0.0.1", 0))
@@ -38,7 +39,71 @@ class TestTuiActions:
         port = srv.getsockname()[1]
         ok, msg = run_ping("127.0.0.1", str(port))
         srv.close()
-        assert ok and "reachable" in msg
+        # ICMP path: latency; TCP fallback: 'reachable (tcp)'
+        assert ok and re.search(r"[\d.]+ ms|reachable", msg)
+
+    def test_run_ping_tcp_fallback_when_ping_missing(self, monkeypatch):
+        """No ping binary -> TCP-port probe, clearly labeled (tcp)."""
+        import socket
+
+        import utils.tui_actions as mod
+        monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = str(srv.getsockname()[1])
+        ok, msg = mod.run_ping("127.0.0.1", port)
+        srv.close()
+        assert ok and "reachable (tcp)" in msg
+
+    def test_run_ping_reports_latency_from_ping_output(self, monkeypatch):
+        import subprocess as sp
+
+        import utils.tui_actions as mod
+        monkeypatch.setattr(
+            mod.shutil, "which", lambda name: "/usr/bin/ping")
+        monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
+            [], 0, stdout="1 received, 0% loss\ntime=23.4 ms",
+            stderr=""))
+        ok, msg = mod.run_ping("h.example.com", "22")
+        assert ok and "23.4 ms" in msg
+
+    def test_run_ping_unknown_host(self, monkeypatch):
+        import subprocess as sp
+
+        import utils.tui_actions as mod
+        monkeypatch.setattr(
+            mod.shutil, "which", lambda name: "/usr/bin/ping")
+        monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
+            [], 68, stdout="", stderr="ping: Name or service not known"))
+        ok, msg = mod.run_ping("nope.invalid", "22")
+        assert not ok and "unknown host" in msg
+
+    def test_run_ping_packet_loss(self, monkeypatch):
+        import subprocess as sp
+
+        import utils.tui_actions as mod
+        monkeypatch.setattr(
+            mod.shutil, "which", lambda name: "/usr/bin/ping")
+        monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
+            [], 1, stdout="1 packets transmitted, 0 received, "
+            "100% packet loss", stderr=""))
+        ok, msg = mod.run_ping("192.0.2.1", "1")
+        assert not ok and "unreachable" in msg
+
+    def test_run_ping_unpermitted_caps_falls_back_to_tcp(self, monkeypatch):
+        import subprocess as sp
+
+        import utils.tui_actions as mod
+        monkeypatch.setattr(
+            mod.shutil, "which", lambda name: "/usr/bin/ping")
+        monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
+            [], 2, stdout="", stderr="ping: Operation not permitted"))
+        calls = []
+        monkeypatch.setattr(mod, "_tcp_probe",
+                            lambda h, p: calls.append((h, p)) or (True, "tcp-marker"))
+        ok, msg = mod.run_ping("127.0.0.1", "2222")
+        assert ok and msg == "tcp-marker" and calls == [("127.0.0.1", "2222")]
 
     def test_run_ping_unreachable(self):
         ok, msg = run_ping("192.0.2.1", "1")
@@ -607,8 +672,11 @@ class TestBrowserApp:
         assert not app.is_running or app.return_value == 0
 
     async def test_ping_action_updates_status(self):
+        """192.0.2.1 (TEST-NET-1) never answers: ✗. (A closed TCP port
+        used to fail the old probe; real ICMP ping correctly reports
+        the HOST's reachability.)"""
         app = SessionBrowser(
-            {"solo": {"HostName": "127.0.0.1", "PortNumber": "1"}},
+            {"solo": {"HostName": "192.0.2.1", "PortNumber": "1"}},
             [], {}, None)
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -617,7 +685,22 @@ class TestBrowserApp:
             await pilot.pause()
             await pilot.press("p")
             await pilot.pause()
-            assert "✗" in app.status_message  # port 1 refused
+            assert "✗" in app.status_message  # no reply
+
+    async def test_ping_jump_host_note_on_failure(self):
+        """A failed direct probe of a jump-hosted session says so."""
+        app = SessionBrowser(
+            {"viasolo": {"HostName": "192.0.2.9", "PortNumber": "22",
+                         "ProxyMethod": "6", "ProxyHost": "gate.example.com"}},
+            [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            assert "✗" in app.status_message
+            assert "gate.example.com" in app.status_message
 
     async def test_slash_focuses_filter_enter_connects(self):
         called = []
@@ -1381,6 +1464,45 @@ class TestEditModal:
             await pilot.pause()
             text = app.query_one("#keybar", FARKeyBar).bar_text()
             assert "Find" in text  # browser keybar restored
+
+    async def test_e_opens_edit_for_highlighted(self, tmp_path):
+        """e = open the edit dialog for the highlighted session."""
+        from utils.far_style import FARKeyBar
+        from utils.tui_actions import EditSessionModal
+
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            # the keybar advertises the hotkey
+            assert "e Edit" in app.query_one("#keybar", FARKeyBar).bar_text()
+            await pilot.press("e")
+            await pilot.pause()
+            assert isinstance(app.screen, EditSessionModal)
+            assert app.focused.id == "edit-HostName"
+
+    async def test_e_gated_while_action_menu_open(self, tmp_path):
+        """e must not open the edit dialog underneath/behind an open
+        popup menu (the menu owns the screen while it is up)."""
+        from utils.tui_actions import SessionActionMenu
+
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.run_action_with_modal(self.NAME)
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)
+            assert app.check_action("edit", ()) is False
+            await pilot.press("e")
+            await pilot.pause()
+            assert isinstance(app.screen, SessionActionMenu)  # unchanged
+
+    async def test_e_no_reg_reports_status(self):
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("e")
+            await pilot.pause()
+            assert "no .reg file" in app.status_message
 
     async def test_right_click_menu_reaches_edit(self, tmp_path):
         """menu -> Edit settings -> the FAR edit dialog opens."""

@@ -658,7 +658,12 @@ class SessionBrowser(App[int]):
         else:
             from .tui_actions import run_ping
             ok, msg = run_ping(host, port)
-            self.status_message = ("✓ " if ok else "✗ ") + msg
+            # a jump-hosted session may be unreachable to a direct probe
+            note = ""
+            if not ok and session.get("ProxyMethod", "0").strip() == "6" \
+                    and session.get("ProxyHost", "").strip():
+                note = f" (direct probe; connects via {session['ProxyHost']})"
+            self.status_message = ("✓ " if ok else "✗ ") + msg + note
         self._update_status()
 
     async def action_copy(self) -> None:

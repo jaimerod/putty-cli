@@ -69,7 +69,7 @@ putty-cli --reg FILE           use a specific .reg file
 - **live preview pane**: the ssh command for the highlighted session,
   built without side effects (no puttygen run, no logs written)
 - keys: Enter connect · click select · Tab panes · right-click context
-  menu · p ping · y copy command · l logs · q quit
+  menu · p ping · y copy command · l logs · e edit · q quit
 - right-click opens a cursor-positioned context menu (Connect / Ping /
   Copy / Logs / **Edit settings**; arrows navigate, Enter executes,
   Esc or clicking outside closes)
@@ -106,7 +106,9 @@ role (frames, captions, menus, inputs, key bar, shadows) is one field.
   groups under a `PROD` header), then everything else. Type to filter, `/`
   to search, Esc to quit.
 - **Action menu** on Enter: Connect, Copy ssh command (OSC52 clipboard,
-  works through tmux/ssh chains), Ping host (TCP probe, 3s timeout), Back.
+  works through tmux/ssh chains), Ping (ICMP via the system `ping` with
+  round-trip latency; falls back to a TCP-port probe when ping is
+  unavailable — the action menu's Ping and `p` both), Back.
 - **fzf mode** (`--fzf`): preview pane dry-builds the ssh command for the
   highlighted session.
 - **Hot reload**: if the `.reg` file changes while the menu is open, the
