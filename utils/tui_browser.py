@@ -227,6 +227,7 @@ class SessionBrowser(App[int]):
         Binding("p", "ping", "Ping"),
         Binding("y", "copy", "Copy Command"),
         Binding("l", "logs", "View Session Log"),
+        Binding("e", "edit", "Edit"),
         Binding("escape", "blur_filter", "List"),
     ]
 
@@ -286,17 +287,17 @@ class SessionBrowser(App[int]):
                                  markup=True)
         yield Static("", id="status")
         yield FARKeyBar(
-            [("Enter", "Connect"), ("RMB", "Menu"),
-             ("/", "Find"), ("Tab", "Pane"),
-             ("p", "Ping"), ("y", "Copy"), ("l", "Log"), ("q", "Quit")],
+            [("Enter", "Connect"), ("/", "Find"), ("Tab", "Pane"),
+             ("e", "Edit"), ("p", "Ping"), ("y", "Copy"), ("l", "Log"),
+             ("q", "Quit")],
             id="keybar",
         )
 
     KEYBAR_LIST = [
-        ("Enter", "Connect", "connect"), ("RMB", "Menu", None),
+        ("Enter", "Connect", "connect"),
         ("/", "Find", "focus_filter"), ("Tab", "Pane", "next_pane"),
-        ("p", "Ping", "ping"), ("y", "Copy", "copy"), ("l", "Log", "logs"),
-        ("q", "Quit", "quit"),
+        ("e", "Edit", "edit"), ("p", "Ping", "ping"),
+        ("y", "Copy", "copy"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
     ]
     KEYBAR_FILTER = [
         ("Enter", "Pick+Connect", None), ("Esc", "Back to list", "blur_filter"),
@@ -606,9 +607,10 @@ class SessionBrowser(App[int]):
         preview.update(preview_text(self.usable[row.name], self.reg_path))
 
     def check_action(self, action: str, parameters: tuple) -> bool:
-        """Disable the priority Enter binding while a modal/log screen is
-        active so the modal's own widgets and keys keep working."""
-        if action == "connect":
+        """Disable bindings while a modal/log screen is active so the
+        modal's own widgets and keys keep working (also keeps e/Enter
+        from opening dialogs underneath or behind an open menu)."""
+        if action in ("connect", "edit"):
             from .tui_actions import EditSessionModal, LogViewerScreen, SessionActionMenu
             return type(self.screen) not in (
                 SessionActionMenu, LogViewerScreen, EditSessionModal)
@@ -676,6 +678,15 @@ class SessionBrowser(App[int]):
         else:
             self.status_message = "copy failed"
         self._update_status()
+
+    async def action_edit(self) -> None:
+        """e: open the edit dialog for the highlighted session."""
+        sel = self._selected_session()
+        if sel is None:
+            self.status_message = "no session highlighted"
+            self._update_status()
+            return
+        await self._open_edit_modal(sel[0])
 
     async def action_logs(self) -> None:
         """Newest log for the highlighted session, in the searchable viewer."""
