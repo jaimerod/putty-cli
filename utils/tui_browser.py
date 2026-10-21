@@ -118,33 +118,29 @@ def _row(
     return SessionRow(name, display, session_tag(name))
 
 
-def preview_text(
-    session: Dict[str, Any], reg_path: Optional[Path]
-) -> str:
-    """Side-effect-free ssh command preview for the highlighted session."""
+def detail_values(
+    name: str, session: Dict[str, Any],
+    reg_path: Optional[Path],
+) -> Dict[str, str]:
+    """Field values for the CONNECTION DETAIL pane. The command is built
+    without side effects (no puttygen run, no writes) like the preview
+    before it."""
     cmd, _ = build_ssh_command(
-        "preview", session, reg_path=reg_path, tmux=False,
-        quiet=True, convert_keys=False,
+        unquote_display(name), session, reg_path=reg_path,
+        tmux=False, quiet=True, convert_keys=False,
     )
-    if not cmd:
-        return "(no hostname)"
-    lines = [
-        "[b]SSH Command[/b]",
-        "[green]" + shlex.join(cmd) + "[/green]",
-        "",
-        "[b]Options[/b]",
-        f"Port        {session.get('PortNumber', '22')}",
-        f"User        {session.get('UserName', '-') or '-'}",
-        f"Jump Host   {session.get('ProxyHost', '-') or '-'}"
-        if session.get("ProxyMethod", "0").strip() == "6" else
-        "Jump Host   -",
-        f"Key         {session.get('PublicKeyFile', '') or '-'}"
-        if session.get("PublicKeyFile", "").strip() else "Key         -",
-        f"Remote Cmd  {session.get('RemoteCommand', '-') or '-'}"
-        if session.get("RemoteCommand", "").strip() else "Remote Cmd  -",
-        f"Protocol    {session.get('Protocol', 'ssh')}",
-    ]
-    return "\n".join(lines)
+    jump = (session.get("ProxyHost", "").strip()
+            if session.get("ProxyMethod", "0").strip() == "6" else "")
+    return {
+        "command": shlex.join(cmd) if cmd else "(no hostname)",
+        "HostName": session.get("HostName", "").strip() or "-",
+        "UserName": session.get("UserName", "").strip() or "-",
+        "PortNumber": session.get("PortNumber", "22") or "22",
+        "Protocol": session.get("Protocol", "ssh").strip() or "ssh",
+        "PublicKeyFile": session.get("PublicKeyFile", "").strip() or "-",
+        "ProxyHost": jump or "-",
+        "RemoteCommand": session.get("RemoteCommand", "").strip() or "-",
+    }
 
 
 class _SessionItem(ListItem):
@@ -168,6 +164,40 @@ class _PaneList(ListView):
     walking the focus chain; / reaches the filter."""
 
     BINDINGS = [Binding("tab", "app.next_pane", "Pane", show=False)]
+
+
+DETAIL_FIELDS = (
+    ("Host", "HostName"),
+    ("User", "UserName"),
+    ("Port", "PortNumber"),
+    ("Protocol", "Protocol"),
+    ("Key", "PublicKeyFile"),
+    ("Jump host", "ProxyHost"),
+    ("Remote cmd", "RemoteCommand"),
+)
+
+
+class DetailField(Static, can_focus=False):
+    """Read-only far-field: edit-dialog-style form widget for the detail
+    pane. The value is set programmatically as the highlight moves;
+    never focusable or text-editable (this Textual's Input has no
+    read-only mode, so fields are field-styled Statics)."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__("", classes="detail-field", markup=False, **kwargs)
+
+    @property
+    def value(self) -> str:
+        return str(self.content)
+
+    @value.setter
+    def value(self, text: str) -> None:
+        self.update(text)
+
+
+class DetailPane(Vertical):
+    """The CONNECTION DETAIL pane: a read-only form (SSH command box +
+    labeled field rows) refreshed in place when the highlight moves."""
 
 
 async def app_push_screen(
@@ -209,7 +239,17 @@ class SessionBrowser(App[int]):
         color: $foreground;
         background: $background;
     }}
-    #preview {{ padding: 0 1; color: $foreground; }}
+    #preview {{ padding: 0 1; }}
+    .detail-label {{ width: 13; height: 1; color: $foreground; }}
+    .detail-row {{ height: 1; width: 100%; layout: horizontal; }}
+    .detail-field {{
+        border: none;
+        background: {ACTIVE_PALETTE.input_bg};
+        color: {ACTIVE_PALETTE.input_fg};
+        height: 1;
+        width: 100%;
+    }}
+    #detail-command {{ height: auto; }}
     Static#status {{ dock: bottom; height: 1; color: $primary;
                     background: $background; padding: 0 1; }}
     FARKeyBar {{ dock: bottom; }}
@@ -283,8 +323,17 @@ class SessionBrowser(App[int]):
                 yield FarShadow()
                 with FarWindow(id="preview-win",
                                title="CONNECTION DETAIL"):
-                    yield Static("select a session", id="preview",
-                                 markup=True)
+                    with DetailPane(id="preview"):
+                        yield Static("SSH Command",
+                                     classes="detail-label", markup=False)
+                        yield Static("", classes="detail-field",
+                                     id="detail-command", markup=False)
+                        for field_label, key in DETAIL_FIELDS:
+                            with Horizontal(classes="detail-row"):
+                                yield Static(field_label,
+                                             classes="detail-label",
+                                             markup=False)
+                                yield DetailField(id=f"detail-{key}")
         yield Static("", id="status")
         yield FARKeyBar(
             [("Enter", "Connect"), ("/", "Find"), ("Tab", "Pane"),
@@ -599,12 +648,22 @@ class SessionBrowser(App[int]):
         self._update_preview()
 
     def _update_preview(self) -> None:
+        """Fill the CONNECTION DETAIL form widgets from the highlight."""
+        detail = self.query_one("#preview", DetailPane)
         row = self._current_row()
-        preview = self.query_one("#preview", Static)
+        fields = [detail.query_one(f"#detail-{key}", DetailField)
+                  for _, key in DETAIL_FIELDS]
         if row is None or row.name.startswith("__"):
-            preview.update("select a session")
+            detail.query_one(
+                "#detail-command", Static).update("select a session")
+            for field in fields:
+                field.value = ""
             return
-        preview.update(preview_text(self.usable[row.name], self.reg_path))
+        values = detail_values(
+            row.name, self.usable[row.name], self.reg_path)
+        detail.query_one("#detail-command", Static).update(values["command"])
+        for field, (_, key) in zip(fields, DETAIL_FIELDS):
+            field.value = values[key]
 
     def check_action(self, action: str, parameters: tuple) -> bool:
         """Disable bindings while a modal/log screen is active so the

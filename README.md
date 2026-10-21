@@ -66,8 +66,11 @@ putty-cli --reg FILE           use a specific .reg file
 - **left column, two stacked panes** (FAR panel style): RECENT
   CONNECTIONS on top (recents with `2h ago` / `✗` metadata), ALL
   CONNECTIONS below (every session, tag-grouped); `Tab` toggles panes
-- **live preview pane**: the ssh command for the highlighted session,
-  built without side effects (no puttygen run, no logs written)
+- **CONNECTION DETAIL pane**: a read-only form — a wrap-shown SSH
+  command box plus labeled field rows (Host, User, Port, Protocol,
+  Key, Jump host, Remote cmd) — refreshed live as the highlight moves;
+  the command is built without side effects (no puttygen run, no logs
+  written)
 - keys: Enter connect · click select · Tab panes · right-click context
   menu · p ping · y copy command · l logs · e edit · q quit
 - right-click opens a cursor-positioned context menu (Connect / Ping /

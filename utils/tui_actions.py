@@ -425,7 +425,10 @@ _DEFAULTS = {
 
 class _FarFlatButton(Static, can_focus=True):
     """FAR dialog button: black on light-blue, inverted when focused;
-    activates on Enter/Space/click."""
+    activates on Enter/Space/click.
+
+    The action string MUST carry the screen namespace ("screen.save") -
+    unprefixed actions do NOT bubble from a widget to its screen."""
 
     def __init__(self, label: str, action: str) -> None:
         super().__init__(f" {label} ", classes="edit-btn", markup=False)
@@ -443,7 +446,6 @@ class _FarFlatButton(Static, can_focus=True):
             await self._fire()
 
     async def _fire(self) -> None:
-        # unprefixed actions bubble from the button to the modal screen
         await self.run_action(self._action)
 
 
@@ -581,8 +583,8 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
                                 id=f"edit-{key}")
             yield Static("", id="edit-error", markup=False)
             with Horizontal(classes="edit-buttons"):
-                yield _FarFlatButton("Save", "save")
-                yield _FarFlatButton("Cancel", "cancel")
+                yield _FarFlatButton("Save", "screen.save")
+                yield _FarFlatButton("Cancel", "screen.cancel")
 
     def on_mount(self) -> None:
         # FAR dialogs: centered over the browser underneath

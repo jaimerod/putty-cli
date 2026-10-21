@@ -18,7 +18,13 @@ import putty
 from utils.far_style import ACTIVE_PALETTE, to_textual_theme
 from utils.palette_util import get_palette
 from utils.tui_actions import run_ping
-from utils.tui_browser import SessionBrowser, build_all_rows, build_recent_rows, preview_text
+from utils.tui_browser import (
+    DETAIL_FIELDS,
+    SessionBrowser,
+    build_all_rows,
+    build_recent_rows,
+    detail_values,
+)
 
 USABLE = {
     "prod:web-1": {"HostName": "a.example.com", "UserName": "ops",
@@ -559,26 +565,91 @@ class TestPanes:
 
 
 class TestPreview:
-    def test_preview_text_contents(self):
-        text = preview_text(
-            {"HostName": "a.example.com", "UserName": "ops",
-             "PortNumber": "2222", "PublicKeyFile": "x.ppk",
-             "ProxyMethod": "6", "ProxyHost": "j.example.com"},
-            None,
-        )
-        assert "ssh" in text
-        assert "ops@a.example.com" in text
-        assert "j.example.com" in text
+    """CONNECTION DETAIL form: values per highlighted session."""
 
-    def test_preview_no_hostname(self):
-        assert preview_text({"PortNumber": "22"}, None) == "(no hostname)"
+    def _app(self):
+        return SessionBrowser(
+            {"prod:web-1": {
+                "HostName": "a.example.com", "UserName": "ops",
+                "PortNumber": "2222", "PublicKeyFile": "x.ppk",
+                "ProxyMethod": "6", "ProxyHost": "j.example.com",
+                "Protocol": "mosh", "RemoteCommand": "htop"}},
+            [], {}, None)
 
-    def test_preview_no_side_effects(self, tmp_path, monkeypatch, capsys):
+    def test_detail_values_contents(self):
+        app = self._app()
+        values = detail_values(
+            "prod:web-1", app.usable["prod:web-1"], None)
+        assert values["HostName"] == "a.example.com"
+        assert values["UserName"] == "ops"
+        assert values["PortNumber"] == "2222"
+        assert values["Protocol"] == "mosh"
+        assert values["PublicKeyFile"] == "x.ppk"
+        assert values["ProxyHost"] == "j.example.com"   # ProxyMethod 6
+        assert values["RemoteCommand"] == "htop"
+        assert "ssh" in values["command"]
+        assert "ops@a.example.com" in values["command"]
+
+    def test_detail_values_no_hostname(self):
+        values = detail_values(
+            "weird", {"PortNumber": "22"}, None)
+        assert values["command"] == "(no hostname)"
+        assert values["ProxyHost"] == "-"   # no jump without ProxyMethod 6
+        assert values["Protocol"] == "ssh"
+
+    def test_detail_no_side_effects(self, tmp_path, monkeypatch, capsys):
         """convert_keys=False: no puttygen, no stdout noise, no makedirs."""
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "never"))
-        preview_text({"HostName": "h", "PublicKeyFile": "zz.ppk"}, None)
+        detail_values(
+            "prod:web-1", self._app().usable["prod:web-1"], None)
         assert capsys.readouterr().out == ""
         assert not (tmp_path / "never").exists()
+
+
+class TestDetailPane:
+    """The detail pane is a read-only form of far-field widgets."""
+
+    async def test_fields_render_and_track_highlight(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            lv = app.query_one("#sessions")
+            lv.index = next(i for i, r in enumerate(app.filtered_rows)
+                            if r.name == "prod:web-1")
+            await pilot.pause()
+            assert app.query_one("#detail-HostName").value \
+                == "a.example.com"
+            assert app.query_one("#detail-PortNumber").value == "2222"
+            lv.index = next(i for i, r in enumerate(app.filtered_rows)
+                            if r.name == "solo")
+            await pilot.pause()
+            assert app.query_one("#detail-HostName").value == "d.example.com"
+            assert app.query_one("#detail-PortNumber").value == "22"
+            # every DETAIL_FIELDS row exists
+            for _, key in DETAIL_FIELDS:
+                assert app.query_one(f"#detail-{key}")
+
+    async def test_detail_fields_are_never_focusable(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            for _, key in DETAIL_FIELDS:
+                assert not app.query_one(f"#detail-{key}").focusable
+            # tab still toggles panes, fields are not in the cycle
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.query_one("*:focus").id == "recents"
+
+    async def test_placeholder_when_nothing_highlightable(self):
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#filter", Input).value = "zzz-not-a-session"
+            await pilot.pause()
+            await pilot.pause()
+            assert str(app.query_one("#detail-command").render()) \
+                == "select a session"
+            assert app.query_one("#detail-HostName").value == ""
 
 
 class TestBrowserApp:
@@ -609,10 +680,10 @@ class TestBrowserApp:
         async with app.run_test() as pilot:
             await pilot.pause()
             lv = app.query_one("#sessions")
-            # move to a session with a port to see preview change
+            # move to a session with a port to see the command field change
             lv.index = 1
             await pilot.pause()
-            text = str(app.query_one("#preview").render())
+            text = str(app.query_one("#detail-command").render())
             assert "ssh" in text or "select" in text
 
     async def test_arrow_keys_update_preview(self):
@@ -622,15 +693,15 @@ class TestBrowserApp:
         async with app.run_test() as pilot:
             await pilot.pause()
             lv = app.query_one("#sessions")
-            # first selectable row is prod:web-1 (port 2222 in preview)
+            # first selectable row is prod:web-1 (port 2222 in the command)
             lv.index = next(i for i, r in enumerate(app.filtered_rows)
                             if r.name == "prod:web-1")
             await pilot.pause()
-            before = str(app.query_one("#preview").render())
+            before = str(app.query_one("#detail-command").render())
             lv.index = next(i for i, r in enumerate(app.filtered_rows)
                             if r.name == "solo")
             await pilot.pause()
-            after = str(app.query_one("#preview").render())
+            after = str(app.query_one("#detail-command").render())
             assert before != after
             assert "d.example.com" in after
 
@@ -642,7 +713,7 @@ class TestBrowserApp:
             await pilot.pause()
             row = app._current_row()
             assert row is not None and not row.name.startswith("__")
-            preview = str(app.query_one("#preview").render())
+            preview = str(app.query_one("#detail-command").render())
             assert "ssh" in preview  # a real session command, not placeholder
 
     async def test_filter_hide_headers_then_clear(self):
@@ -654,7 +725,7 @@ class TestBrowserApp:
             await pilot.pause()
             names = [r.name for r in app.filtered_rows]
             assert names == ["staging:web"]
-            preview = str(app.query_one("#preview").render())
+            preview = str(app.query_one("#detail-command").render())
             assert "c.example.com" in preview
             filt.value = ""
             await pilot.pause()
@@ -1503,6 +1574,62 @@ class TestEditModal:
             await pilot.press("e")
             await pilot.pause()
             assert "no .reg file" in app.status_message
+
+    async def test_enter_on_focused_button_saves(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+
+        app, reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-HostName", Input).value = "via-enter"
+            btn = next(w for w in modal.query(".edit-btn")
+                       if "Save" in str(w.render()))
+            btn.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            for _ in range(3):
+                await pilot.pause()
+            assert parse_putty_reg(reg)[self.NAME]["HostName"] == "via-enter"
+            assert app.screen is not modal   # dialog closed
+
+    async def test_save_button_click_saves(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+
+        app, reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-HostName", Input).value = "via-click"
+            btn = next(w for w in modal.query(".edit-btn")
+                       if "Save" in str(w.render()))
+            await pilot.click(btn)
+            for _ in range(3):
+                await pilot.pause()
+            assert parse_putty_reg(reg)[self.NAME]["HostName"] == "via-click"
+            assert app.screen is not modal   # dialog closed
+
+    async def test_cancel_button_discards(self, tmp_path):
+        app, reg = self._setup(tmp_path)
+        before = reg.read_bytes()
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-HostName", Input).value = "nope"
+            btn = next(w for w in modal.query(".edit-btn")
+                       if "Cancel" in str(w.render()))
+            await pilot.click(btn)
+            for _ in range(3):
+                await pilot.pause()
+            assert reg.read_bytes() == before   # nothing written
+            assert app.screen is not modal      # dialog closed
+            assert "edit cancelled" in app.status_message
 
     async def test_right_click_menu_reaches_edit(self, tmp_path):
         """menu -> Edit settings -> the FAR edit dialog opens."""
