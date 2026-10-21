@@ -249,7 +249,8 @@ class SessionBrowser(App[int]):
         height: 1;
         width: 100%;
     }}
-    #detail-command {{ height: auto; }}
+    #detail-command {{ height: 3; overflow: hidden; }}
+    .detail-gap {{ height: 1; }}
     Static#status {{ dock: bottom; height: 1; color: $primary;
                     background: $background; padding: 0 1; }}
     FARKeyBar {{ dock: bottom; }}
@@ -324,16 +325,18 @@ class SessionBrowser(App[int]):
                 with FarWindow(id="preview-win",
                                title="CONNECTION DETAIL"):
                     with DetailPane(id="preview"):
-                        yield Static("SSH Command",
-                                     classes="detail-label", markup=False)
-                        yield Static("", classes="detail-field",
-                                     id="detail-command", markup=False)
                         for field_label, key in DETAIL_FIELDS:
                             with Horizontal(classes="detail-row"):
                                 yield Static(field_label,
                                              classes="detail-label",
                                              markup=False)
                                 yield DetailField(id=f"detail-{key}")
+                        yield Static("", classes="detail-gap",
+                                     markup=False)
+                        yield Static("SSH Command",
+                                     classes="detail-label", markup=False)
+                        yield Static("", classes="detail-field",
+                                     id="detail-command", markup=False)
         yield Static("", id="status")
         yield FARKeyBar(
             [("Enter", "Connect"), ("/", "Find"), ("Tab", "Pane"),

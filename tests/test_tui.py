@@ -640,6 +640,36 @@ class TestDetailPane:
             await pilot.pause()
             assert app.query_one("*:focus").id == "recents"
 
+    async def test_command_field_is_last_with_gap(self):
+        """SSH command moved to the bottom: fields, a blank gap row, the
+        label, then a fixed 3-row command box."""
+        app = SessionBrowser(USABLE, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            children = list(app.query_one("#preview").children)
+            assert children[-1].id == "detail-command"
+            assert children[-1].region.height == 3      # fixed box
+            assert str(children[-2].render()).strip() == "SSH Command"
+            assert "detail-gap" in children[-3].classes
+            assert not str(children[-3].render()).strip()
+            assert "detail-row" in children[0].classes  # fields start first
+
+    async def test_command_box_height_consistent(self):
+        """A short command and a long one get the SAME box height."""
+        app = SessionBrowser(
+            {"solo": {"HostName": "d.example.com"},
+             "longy": {"HostName": "l", "User": "",
+                       "RemoteCommand": "x" * 120}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            height_a = app.query_one("#detail-command").region.height
+            app.query_one("#sessions").index = 1
+            await pilot.pause()
+            height_b = app.query_one("#detail-command").region.height
+            assert height_a == height_b == 3
+
     async def test_placeholder_when_nothing_highlightable(self):
         app = SessionBrowser(USABLE, [], {}, None)
         async with app.run_test() as pilot:
