@@ -322,13 +322,24 @@ class TestPanes:
             assert top.x == bottom.x and top.width == bottom.width
 
     async def test_panes_have_titles(self):
+        """Captions live inline in the top border row, centered, yellow
+        on blue (FAR.exe dialog-title look)."""
+        from textual.color import Color
+
         app = SessionBrowser(USABLE, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause()
             for win_id, label in (("#recent-win", "RECENT CONNECTIONS"),
                                   ("#all-win", "ALL CONNECTIONS")):
-                title = app.query_one(f"{win_id} .far-window-title")
-                assert str(title.render()) == label
+                win = app.query_one(win_id)
+                assert win.border_title == label
+                assert win.styles.border_title_align == "center"
+                assert win.styles.border_title_color \
+                    == Color(255, 255, 85)
+            window = app.query_one("#recent-win")
+            frame_top = window.region.y  # caption is inside the frame row
+            assert app.query_one("#recents").region.y \
+                == frame_top + 1  # rows start right under the frame
 
     async def test_recent_pane_rows_with_metadata(self):
         import time

@@ -62,18 +62,16 @@ FarWindow {
 """
 
 # FAR-style window frame: silver double-line border on blue.
+# Window captions (border_title) sit inline in the top border row,
+# centered, yellow on blue - the FAR.exe dialog-title look.
 FAR_WINDOW_CSS = """
 FarWindow {
     border: double #AAAAAA;
     background: #0000AA;
     width: 1fr;
     height: 1fr;
-}
-FarWindow .far-window-title {
-    color: #FFFF55;
-    background: #0000AA;
-    padding: 0 1;
-    height: 1;
+    border-title-align: center;
+    border-title-color: #FFFF55;
 }
 FarWindow > Static {
     color: #AAAAAA;
@@ -246,10 +244,14 @@ class FarShadow(Static):
 
 
 class FarWindow(Vertical, can_focus=False):
-    """FAR-style window: silver frame on blue; embed FAR_WINDOW_CSS."""
+    """FAR-style window: silver frame on blue; embed FAR_WINDOW_CSS.
+
+    title: caption drawn inline in the top border row, centered
+    (FAR.exe dialog-title style; empty string = no caption)."""
 
     def __init__(self, *children, title: str = "", **kwargs) -> None:
         super().__init__(*children, **kwargs)
+        self.border_title = title
         self.title_text = title
 
 

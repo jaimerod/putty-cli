@@ -264,13 +264,9 @@ class SessionBrowser(App[int]):
             # far-shadow mounts BEFORE its window -> renders underneath
             with Vertical(id="list-col"):
                 yield FarShadow()
-                with FarWindow(id="recent-win"):
-                    yield Static("RECENT CONNECTIONS",
-                                 classes="far-window-title", markup=False)
+                with FarWindow(id="recent-win", title="RECENT CONNECTIONS"):
                     yield _PaneList(id="recents")
-                with FarWindow(id="all-win"):
-                    yield Static("ALL CONNECTIONS",
-                                 classes="far-window-title", markup=False)
+                with FarWindow(id="all-win", title="ALL CONNECTIONS"):
                     yield _PaneList(id="sessions")
             with Vertical(id="preview-col"):
                 yield FarShadow()
