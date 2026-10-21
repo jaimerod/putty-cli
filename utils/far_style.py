@@ -18,7 +18,6 @@ widget modules; custom widget classes' DEFAULT_CSS is unreliable in
 this setup, so all FAR styling is exposed as CSS constants to be
 embedded in the app's CSS.
 """
-import os
 from typing import List, Optional, Sequence, Tuple
 
 from textual import events
@@ -27,7 +26,7 @@ from textual.message import Message
 from textual.theme import Theme
 from textual.widgets import Static
 
-from .palette_util import Palette, get_palette
+from .palette_util import Palette, active_palette_name, get_palette
 
 # ── FAR classic palette (VGA 6-bit values) ──────────────────────────────────
 FAR_BLUE = "#0000AA"      # panel/dialog background
@@ -56,9 +55,9 @@ def to_textual_theme(p: Palette) -> Theme:
     )
 
 # The active palette is fixed per run (read once, before CSS is built):
-# PUTTY_THEME=monokai|far, from the environment or .env (loaded by
+# PUTTY_THEME=far|monokai, from the environment or .env (loaded by
 # putty.py main before the TUI modules are imported).
-ACTIVE_PALETTE = get_palette(os.environ.get("PUTTY_THEME", "far"))
+ACTIVE_PALETTE = get_palette(active_palette_name())
 FAR_THEME = to_textual_theme(ACTIVE_PALETTE)
 
 # Drop shadow block styling - include in the app CSS.

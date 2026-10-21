@@ -93,10 +93,10 @@ classic picker; `--fzf` overrides both).
 
 **Theming**: all TUI colors flow from a palette (see
 `utils/palette_util.py`); select with `PUTTY_THEME=far|monokai` (env
-or .env). `far` = classic DOS blue/silver/cyan; `monokai` =
-dark `#272822` panels, warm gray frames, pink selection. Adding a
-theme = adding a `Palette` entry — every role (frames, captions,
-menus, inputs, key bar, shadows) is one field.
+or .env). The default is **monokai**: dark `#272822` panels, warm gray
+frames, pink selection; `PUTTY_THEME=far` brings back the classic DOS
+blue/silver/cyan. Adding a theme = adding a `Palette` entry — every
+role (frames, captions, menus, inputs, key bar, shadows) is one field.
 ```
 
 ## Interactive features

@@ -84,10 +84,11 @@ MONOKAI_PALETTE = Palette(
 )
 
 PALETTES: Dict[str, Palette] = {
-    p.name: p for p in (FAR_PALETTE, MONOKAI_PALETTE)
+    p.name: p for p in (MONOKAI_PALETTE, FAR_PALETTE)
 }
 
-DEFAULT_THEME = "far"
+# the app look: Monokai. PUTTY_THEME=far restores the classic DOS blue.
+DEFAULT_THEME = "monokai"
 
 
 def get_palette(name: Optional[str] = None) -> Palette:

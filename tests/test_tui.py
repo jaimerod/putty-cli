@@ -1417,7 +1417,8 @@ class TestThemePalettes:
         assert get_palette("monokai").bg == "#272822"
         assert get_palette("monokai").selected_bg == "#F92672"
         assert get_palette("far").bg == "#0000AA"
-        assert get_palette(None).bg == "#0000AA"     # default = far
+        # default look is Monokai (PUTTY_THEME=far restores DOS blue)
+        assert get_palette(None).bg == "#272822"
         with pytest.raises(KeyError, match="known themes"):
             get_palette("gruvbox")
 
