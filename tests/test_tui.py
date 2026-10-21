@@ -59,6 +59,26 @@ class TestLogModal:
             assert isinstance(app.screen, LogModal)
             assert app.screen.log_path == log
 
+    async def test_l_matches_url_quoted_session_names(self, tmp_path,
+                                                      monkeypatch):
+        """Real-world .reg names are URL-quoted (PuTTY exports spaces
+        as %20) while log files carry the decoded name - 'logs do
+        nothing' regression for exactly that mismatch."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "2026-10-21_0337-16gb_Linux_Server.log").write_text(
+            "session log\n", encoding="utf-8")
+        app = SessionBrowser(
+            {"16gb%20Linux%20Server": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            from utils.tui_actions import LogModal
+            assert isinstance(app.screen, LogModal)
+            assert app.screen.log_path.name \
+                == "2026-10-21_0337-16gb_Linux_Server.log"
     async def test_log_modal_scrolls(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         logs_dir = tmp_path / "logs"

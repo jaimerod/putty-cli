@@ -24,16 +24,24 @@ def list_logs(directory: Optional[Path] = None, limit: int = 30,
     """Recent log files as (path, size_bytes, mtime), newest first.
 
     With session_name, only logs whose filename contains the sanitized
-    session name (putty-cli's 'TIMESTAMP-NAME.log' convention)."""
+    session name (putty-cli's 'TIMESTAMP-NAME.log' convention). PuTTY
+    exports URL-quoted names ('Foo%20Bar'), which the connect flow
+    decodes before naming the log file - so match either form."""
     d = directory or log_dir()
     if not d.is_dir():
         return []
-    prefix = safe_name(session_name) if session_name else None
+    variants = set()
+    if session_name:
+        from .titlecase_util import unquote_display
+        unquoted = unquote_display(str(session_name))
+        variants.add(safe_name(unquoted))
+        variants.add(safe_name(str(session_name)))
     logs = [
         (p, p.stat().st_size, p.stat().st_mtime)
         for p in d.glob("*.log") if p.is_file()
-        and (prefix is None or f"-{prefix}" in p.name
-             or p.name == f"{prefix}.log")
+        and (not variants
+             or any(f"-{v}" in p.name or p.name == f"{v}.log"
+                    for v in variants))
     ]
     logs.sort(key=lambda t: t[2], reverse=True)
     return logs[:limit]
