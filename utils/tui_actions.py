@@ -866,13 +866,30 @@ class PingModal(ModalScreen[None]):
         self.dismiss(None)
 
 
+ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"   # CSI sequences (SGR colors, cursor...)
+    r"|\x1b\][^\x07\x1b]*(\x07|\x1b\\)?"  # OSC (title, clipboard...)
+    r"|\x1b[@-Z\\-_]"               # other C1 escapes
+)
+
+
+def _strip_ansi(text: str) -> str:
+    """tmux pipe-pane captures raw terminal bytes incl. SGR/OSC escape
+    sequences and CR-overwrites; they render as garbage in the log
+    view, so scrub them and collapse \r-carriage returns."""
+    return ANSI_RE.sub("", text.replace("\r\n", "\n")).replace("\r", "")
+
+
 class LogModal(ModalScreen[None]):
     """FAR dialog for ONE session's log: scrollbar view + live filter.
 
-    Self-contained chrome (title / search field / log box / match
-    status / key bar) inside one centered dialog over the browser.
-    '/' focuses the search; typing filters to matching lines live;
-    n/N jump between matches (with context); Esc/q closes.
+    Like FAR.exe's file viewer, this dialog is OPAQUE and covers the
+    screen: no drop-shadow echo, no offset positioning - a single
+    raster, so terminal repaints can't ghost the background. Chrome
+    (title / search field / log box / match status / key bar) inside
+    one bordered view. '/' focuses the search; typing filters to
+    matching lines live; n/N jump between matches (with context);
+    Esc/q closes.
     """
 
     BINDINGS = [
@@ -892,26 +909,7 @@ class LogModal(ModalScreen[None]):
         self.match_index: int = -1
 
     DEFAULT_CSS = f"""
-    LogModal {{ background: transparent; }}
-
-    #log-shadow {{
-        position: absolute;
-        width: 0;
-        height: 0;
-        background: {ACTIVE_PALETTE.shadow};
-        color: {ACTIVE_PALETTE.dim};
-        layer: shadow;
-    }}
-
-    #log-box {{
-        background: {ACTIVE_PALETTE.bg};
-        border: round {ACTIVE_PALETTE.frame};
-        width: 96%;
-        height: 92%;
-        layout: vertical;
-        padding: 0;
-        layer: window;
-    }}
+    LogModal {{ background: {ACTIVE_PALETTE.bg}; }}
 
     #log-title {{
         dock: top;
@@ -930,9 +928,9 @@ class LogModal(ModalScreen[None]):
         padding: 0 2;
     }}
     #log-view {{
-        border: solid {ACTIVE_PALETTE.frame};
+        border: round {ACTIVE_PALETTE.frame};
         background: {ACTIVE_PALETTE.bg};
-        margin: 1 2 1 2;
+        margin: 1 1 1 2;
         height: 1fr;
         scrollbar-size-vertical: 2;
         scrollbar-color: {ACTIVE_PALETTE.highlight_bg};
@@ -949,43 +947,24 @@ class LogModal(ModalScreen[None]):
         background: {ACTIVE_PALETTE.bg};
         color: {ACTIVE_PALETTE.text};
     }}
-    #log-box FARKeyBar {{ dock: bottom; }}
+    FARKeyBar {{ dock: bottom; }}
     """
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="log-shadow", markup=False)
-        with Vertical(id="log-box"):
-            yield Static(f" {self.log_path.name}", id="log-title",
-                         markup=False)
-            yield Input(
-                placeholder="/ search this log (n next match, N previous)",
-                id="log-search",
-            )
-            yield RichLog(id="log-view", wrap=False, highlight=False,
-                          max_lines=self.max_lines)
-            yield Static("", id="log-status", markup=False)
-            yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
+        yield Static(f" {self.log_path.name}", id="log-title",
+                     markup=False)
+        yield Input(
+            placeholder="/ search this log (n next match, N previous)",
+            id="log-search",
+        )
+        yield RichLog(id="log-view", wrap=False, highlight=False,
+                      max_lines=self.max_lines)
+        yield Static("", id="log-status", markup=False)
+        yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
 
     def on_mount(self) -> None:
-        # center the dialog: 96% x 92% leaves a border of the browser
-        size = self.size
-        self.query_one("#log-box", Vertical).styles.offset = (
-            max(0, int(size.width * 0.02)), max(0, int(size.height * 0.03)))
         self._load()
         self.query_one("#log-view", RichLog).focus()
-        self.call_after_refresh(self._sync_shadow)
-
-    def _sync_shadow(self) -> None:
-        try:
-            box = self.query_one("#log-box", Vertical)
-            shadow = self.query_one("#log-shadow", Static)
-        except Exception:  # noqa: BLE001 - widgets not mounted yet
-            return
-        _sync_far_shadow(box, shadow, self._underlying_screen)
-
-    @property
-    def _underlying_screen(self) -> Any:
-        return underlying_browser_screen(self)
 
     KEYBAR_SCROLL = [
         ("/", "Search", "focus_search"), ("n", "Next", "next_match"),
@@ -1029,7 +1008,7 @@ class LogModal(ModalScreen[None]):
         except OSError as e:
             self.lines = [f"[red]Cannot read {self.log_path}: {e}[/red]"]
         else:
-            self.lines = text.splitlines()
+            self.lines = _strip_ansi(text).splitlines()
         self._write_lines(self.lines)
         self._update_status()
 

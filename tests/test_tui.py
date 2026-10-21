@@ -79,6 +79,72 @@ class TestLogModal:
             assert isinstance(app.screen, LogModal)
             assert app.screen.log_path.name \
                 == "2026-10-21_0337-16gb_Linux_Server.log"
+    async def test_log_modal_covers_screen_opaquely(self, tmp_path,
+                                                     monkeypatch):
+        """Regression: the transparent near-fullscreen modal + giant
+        shadow echo ghosted/corrupted the background on real terminals
+        when scrolling. FAR viewer style now: opaque, no echo, no box
+        offsets - one stable raster."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "2026-10-21_0900-solo.log").write_text(
+            "one\x1b[31mred\x1b[0mtwo\r\nline 2\r\n", encoding="utf-8")
+        from textual.color import Color
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            modal = app.screen
+            # opaque: not the transparent-dialog ghosting recipe
+            assert modal.styles.background != Color(0, 0, 0, a=0)
+            assert modal.styles.background \
+                == Color.parse(ACTIVE_PALETTE.bg)
+            assert not modal.query("#log-shadow")    # no echo at all
+            # escape sequences scrubbed; \r-collapsed clean text
+            lines = modal.lines
+            assert "\x1b" not in " ".join(lines) and "\r" not in \
+                " ".join(lines)
+            assert "redtwo" in lines[0]
+            assert lines[1] == "line 2"
+            # geometry: full-screen, nothing offset
+            box = modal.query_one("#log-view")
+            assert box.region.width == 110 or box.region.width > 100
+
+    async def test_scroll_repaints_stably(self, tmp_path, monkeypatch):
+        """Scrolling must not disturb the chrome rows (title/search/
+        status/keybar hold their text and position)."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "2026-10-21_0900-solo.log").write_text(
+            "\n".join(f"line-{i:03d}" for i in range(200)) + "\n",
+            encoding="utf-8")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.press("l")
+            for _ in range(2):
+                await pilot.pause()
+            modal = app.screen
+
+            def chrome():
+                title = modal.query_one("#log-title")
+                status = modal.query_one("#log-status")
+                keybar = modal.query_one("#keybar")
+                return (str(title.render()), str(status.render()),
+                        keybar.region.y, title.region.y)
+
+            before = chrome()
+            lv = modal.query_one("#log-view")
+            for _ in range(10):
+                await pilot.press("down")
+                await pilot.pause()
+            after = chrome()
+            assert after == before          # chrome rows unmoved
+            assert lv.scroll_offset.y > 0   # the LOG scrolled instead
+
     async def test_log_modal_scrolls(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         logs_dir = tmp_path / "logs"
