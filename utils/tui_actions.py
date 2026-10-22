@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from rich.text import Text
 from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -1091,19 +1092,24 @@ class LogModal(ModalScreen[None]):
         radius = 10
         start = max(0, target - radius)
         end = min(len(self.lines), target + radius + 1)
-        self._write_lines([
-            f"[b]{i + 1}[/b] {self.lines[i]}" if i == target
-            else f"  {i + 1} {self.lines[i]}"
-            for i in range(start, end)
-        ])
+        # bold the line number AND the whole match row (Text, not
+        # markup: the log content is never parsed for [tags])
+        rows = [Text(f"  {i + 1} {self.lines[i]}")
+                for i in range(start, end)]
+        rows[target - start] = Text(
+            f"{target + 1} {self.lines[target]}", style="bold")
+        self._write_lines(rows)
         self._update_status()
         self.query_one("#log-view", RichLog).focus()
 
     async def action_focus_search(self) -> None:
         self.query_one("#log-search", Input).focus()
 
-    def _mark(self, index: int, line: str) -> str:
-        return f"[b]{index + 1}[/b] {line}"
+    def _mark(self, index: int, line: str) -> Text:
+        """Log line with a bold line-number prefix, as a Text
+        renderable - the line content is never parsed as markup (log
+        text can legitimately contain '[b]'-looking brackets)."""
+        return Text.assemble((f"{index + 1}", "bold"), f" {line}")
 
     async def action_next_match(self) -> None:
         self._jump_match(1)

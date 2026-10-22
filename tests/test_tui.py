@@ -2091,3 +2091,79 @@ class TestThemePalettes:
             shadow = get_palette("monokai").shadow
             assert app.get_css_variables()["background"] == mono.bg
             assert shadow == "#000000"
+
+
+class TestLogMarkup:
+    """[b] tags are OUT: bold is real via Text renderables (log content
+    is never parsed for markup - bracketed log text stays literal)."""
+
+    def _open(self, tmp_path, body):
+        monkeypatch_dir = tmp_path / "logs"
+        monkeypatch_dir.mkdir()
+        (monkeypatch_dir / "2026-10-21_0900-solo.log").write_text(
+            body, encoding="utf-8")
+        from utils.tui_actions import LogModal
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        screen = LogModal(monkeypatch_dir / "2026-10-21_0900-solo.log")
+        return app, screen
+
+    async def test_mark_is_bold_text_not_tags(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        (tmp_path / "logs").mkdir(exist_ok=True)
+        (tmp_path / "logs" / "2026-10-21_0900-solo.log").write_text(
+            "needle\n", encoding="utf-8")
+        from utils.tui_actions import LogModal
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            screen = LogModal(
+                tmp_path / "logs" / "2026-10-21_0900-solo.log")
+            await app.push_screen(screen)
+            await pilot.pause()
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "needle"
+            await pilot.pause()
+            view = screen.query_one("#log-view")
+            text = "".join(strip.text for strip in view.lines)
+            # no literal tags in the rendering
+            assert "[b]" not in text and "[/b]" not in text
+        # and the pure helper: bold span on the number, plain content
+        mark = screen._mark(11, "hello")
+        assert mark.plain == "12 hello"
+        bold = [sp for sp in mark.spans
+                if "bold" in str(sp.style)]
+        assert bold and bold[0].start == 0
+
+    async def test_match_row_is_bold_in_context(self, tmp_path,
+                                                monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        (tmp_path / "logs").mkdir(exist_ok=True)
+        (tmp_path / "logs" / "2026-10-21_0900-solo.log").write_text(
+            "a\nNEEDLE\nb\n", encoding="utf-8")
+        from utils.tui_actions import LogModal
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            screen = LogModal(
+                tmp_path / "logs" / "2026-10-21_0900-solo.log")
+            await app.push_screen(screen)
+            await pilot.pause()
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "needle"
+            await pilot.pause()
+            await screen.action_next_match()
+            await pilot.pause()
+            view = screen.query_one("#log-view")
+            join = "".join(strip.text for strip in view.lines)
+            assert "[b]" not in join
+            match_row = [
+                strip for i, strip in enumerate(view.lines)
+                if "NEEDLE" in strip.text
+            ]
+            assert len(match_row) == 1, "match row visible, once"
+            segs = getattr(match_row[0], "_segments", None) \
+                or list(match_row[0])
+            assert any("bold" == str(seg.style) for seg in segs), \
+                "the match row is REALLY bold"
