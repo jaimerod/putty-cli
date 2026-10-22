@@ -894,7 +894,7 @@ class LogModal(ModalScreen[None]):
 
     BINDINGS = [
         ("slash", "focus_search", "Search"),
-        ("escape", "dismiss_dialog", "Back"),
+        ("escape", "smart_back", "Back"),
         ("q", "dismiss_dialog", "Back"),
         ("n", "next_match", "Next match"),
         ("N", "prev_match", "Prev match"),
@@ -969,10 +969,10 @@ class LogModal(ModalScreen[None]):
     KEYBAR_SCROLL = [
         ("/", "Search", "focus_search"), ("n", "Next", "next_match"),
         ("N", "Prev", "prev_match"),
-        ("Esc", "Back", "dismiss_dialog"), ("q", "Back", "dismiss_dialog"),
+        ("Esc", "Back", "smart_back"), ("q", "Back", "dismiss_dialog"),
     ]
     KEYBAR_SEARCH = [
-        ("Enter", "Apply", None), ("Esc", "Done", None),
+        ("Enter", "Jump", None), ("Esc", "Done", "smart_back"),
         ("n", "Next", "next_match"), ("N", "Prev", "prev_match"),
     ]
 
@@ -1033,28 +1033,77 @@ class LogModal(ModalScreen[None]):
         if event.input.id == "log-search":
             self._apply_search()
 
-    def _apply_search(self) -> None:
-        term = self.query_one("#log-search", Input).value.strip()
-        if not term:
-            self.match_positions = []
-            self._write_lines(self.lines)
-        else:
+    async def on_input_submitted(self, event: "Input.Submitted") -> None:
+        """Enter in the search ('Jump'): go to the first match and hand
+        focus back to the log so n/N stay hotkeys."""
+        if event.input.id == "log-search":
+            self._ensure_matches(self._current_term())
+            self._show_match_context(0 if self.match_positions else None)
+
+    # ── match state ──────────────────────────────────────────────────
+    # the search term is NEVER cleared: clearing re-runs the live
+    # filter and wipes the match list (the old n/N died after the
+    # first jump because of exactly that race)
+
+    def _current_term(self) -> str:
+        return self.query_one("#log-search", Input).value.strip()
+
+    def _ensure_matches(self, term: str) -> bool:
+        if not self.match_positions and term:
             self.match_positions = [
                 i for i, line in enumerate(self.lines)
                 if term.lower() in line.lower()
             ]
-            self._write_lines([
-                self._mark(i, line) for i, line in enumerate(self.lines)
-                if term.lower() in line.lower()
-            ])
             self.match_index = 0 if self.match_positions else -1
+        if not self.match_positions:
+            self._update_status()
+            return False
+        return True
+
+    def _apply_search(self) -> None:
+        term = self._current_term()
+        if not term:
+            self.match_positions = []
+            self.match_index = -1
+            self._write_lines(self.lines)
+            self._update_status()
+            return
+        self.match_positions = [
+            i for i, line in enumerate(self.lines)
+            if term.lower() in line.lower()
+        ]
+        self.match_index = 0 if self.match_positions else -1
+        self._write_lines([
+            self._mark(i, line) for i, line in enumerate(self.lines)
+            if term.lower() in line.lower()
+        ])
         self._update_status()
 
-    def _mark(self, index: int, line: str) -> str:
-        return f"[b]{index + 1}[/b] {line}"
+    def _show_match_context(self, index: Optional[int]) -> None:
+        """Jump: show a context window around the match and focus the
+        log (n/N become hotkeys again)."""
+        if index is None:
+            self.query_one("#log-view", RichLog).focus()
+            self._update_status()
+            return
+        self.match_index = index
+        target = self.match_positions[index]
+        radius = 10
+        start = max(0, target - radius)
+        end = min(len(self.lines), target + radius + 1)
+        self._write_lines([
+            f"[b]{i + 1}[/b] {self.lines[i]}" if i == target
+            else f"  {i + 1} {self.lines[i]}"
+            for i in range(start, end)
+        ])
+        self._update_status()
+        self.query_one("#log-view", RichLog).focus()
 
     async def action_focus_search(self) -> None:
         self.query_one("#log-search", Input).focus()
+
+    def _mark(self, index: int, line: str) -> str:
+        return f"[b]{index + 1}[/b] {line}"
 
     async def action_next_match(self) -> None:
         self._jump_match(1)
@@ -1063,35 +1112,27 @@ class LogModal(ModalScreen[None]):
         self._jump_match(-1)
 
     def _jump_match(self, direction: int) -> None:
-        """n/N: ensure matches exist for the current term, keep them stable
-        across the jump (clearing the input re-runs _apply_search and
-        wipes match state - so compute positions first, then clear)."""
-        term = self.query_one("#log-search", Input).value.strip()
+        """n/N: cycle the matches of the current term (the term stays in
+        the input, so the state never races away)."""
+        term = self._current_term()
         if not term:
-            return  # nothing to jump to
-        if not self.match_positions:
-            self.match_positions = [
-                i for i, line in enumerate(self.lines)
-                if term.lower() in line.lower()
-            ]
-            if not self.match_positions:
-                self._update_status()
-                return
-        self.match_index = (self.match_index + direction) % len(self.match_positions)
-        target = self.match_positions[self.match_index]
-        # show context around the match (full window, filter cleared)
-        self.query_one("#log-search", Input).value = ""
-        self._write_lines(self._match_context(target))
-        self._update_status()
+            self.query_one("#log-status", Static).update(
+                "n/N need a search term (press / first)")
+            return
+        if self._ensure_matches(term):
+            self._show_match_context(
+                (self.match_index + direction)
+                % len(self.match_positions))
 
-    def _match_context(self, center: int, radius: int = 10) -> List[str]:
-        start = max(0, center - radius)
-        end = min(len(self.lines), center + radius + 1)
-        return [
-            f"[b]{i + 1}[/b] {self.lines[i]}" if i == center
-            else f"  {i + 1} {self.lines[i]}"
-            for i in range(start, end)
-        ]
+    async def action_smart_back(self) -> None:
+        """Esc: from the search field -> back to the log (term and
+        matches kept); anywhere else -> close the dialog."""
+        focused = self.focused or (self.app.focused if self.app else None)
+        if isinstance(focused, Input) and focused.id == "log-search":
+            self.query_one("#log-view", RichLog).focus()
+            self._update_status()
+        else:
+            await self.action_dismiss_dialog()
 
     async def action_dismiss_dialog(self, result: object = None) -> None:
         self.dismiss(None)

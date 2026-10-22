@@ -383,8 +383,117 @@ class TestTuiActions:
             await app.push_screen(screen)
             await pilot.pause()
             before = len(screen.lines)
-            await screen.action_next_match()  # no term -> noop
+            await screen.action_next_match()  # no term -> status hint
+            await pilot.pause()
             assert len(screen.lines) == before
+            assert "need a search term" in str(
+                screen.query_one("#log-status").render())
+
+    async def test_n_n_repeat_jumps_with_term_kept(self, tmp_path,
+                                                   monkeypatch):
+        """THE BUG: after the first n/N jump the input used to be
+        cleared, the async re-filter wiped the match list, and the next
+        n did nothing. Now the term stays in the field; n n N keep
+        cycling (from the log focus, per the Enter/Esc flow)."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "2026-10-21_0900-solo.log").write_text(
+            "\n".join(f"needle {i}" if i % 5 == 0 else f"line {i}"
+                      for i in range(100)) + "\n", encoding="utf-8")
+        from utils.tui_actions import LogModal
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, LogModal)
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "needle"
+            await pilot.pause()
+            assert len(screen.match_positions) == 20   # every 5th line
+            await pilot.press("enter")     # Jump -> match 1, log focus
+            await pilot.pause()
+            assert screen.match_index == 0
+            assert sb.value == "needle"    # term survives the jump
+            await pilot.press("n")
+            await pilot.pause()
+            assert screen.match_index == 1
+            await pilot.press("n")
+            await pilot.pause()
+            assert screen.match_index == 2
+            await pilot.press("N")
+            await pilot.pause()
+            assert screen.match_index == 1
+            assert sb.value == "needle"    # still kept
+            await pilot.press("n")
+            await pilot.pause()
+            assert screen.match_index == 2
+
+    async def test_n_works_with_log_focused(self, tmp_path, monkeypatch):
+        """The common flow: search, Enter (= jump to match 1), then n/N
+        with the log view focused."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "2026-10-21_0900-solo.log").write_text(
+            "\n".join(f"needle {i}" if i % 7 == 0 else "fill"
+                      for i in range(80)) + "\n", encoding="utf-8")
+        from utils.tui_actions import LogModal
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            screen = app.screen
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "needle"
+            await pilot.pause()
+            await pilot.press("enter")     # Jump -> first match
+            await pilot.pause()
+            assert screen.match_index == 0
+            # focus is back in the log: keys stay hotkeys
+            assert getattr(app.focused, "id", None) == "log-view"
+            await pilot.press("n")
+            await pilot.pause()
+            await pilot.press("n")
+            await pilot.pause()
+            assert screen.match_index == 2
+            # Esc from the log closes the dialog
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, LogModal)
+
+    async def test_esc_in_search_blurs_and_keeps_matches(self, tmp_path,
+                                                         monkeypatch):
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir()
+        (logs_dir / "2026-10-21_0900-solo.log").write_text(
+            "needle here\nfill\nneedle there\n", encoding="utf-8")
+        from utils.tui_actions import LogModal
+
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            screen = app.screen
+            sb = screen.query_one("#log-search")
+            sb.focus()
+            sb.value = "needle"
+            await pilot.pause()
+            await pilot.press("escape")    # Done, NOT close
+            await pilot.pause()
+            assert isinstance(app.screen, LogModal)   # still open
+            assert getattr(app.focused, "id", None) == "log-view"
+            assert sb.value == "needle"               # term kept
+            assert len(screen.match_positions) == 2
 
     async def test_prev_jump_wraps_negative(self, tmp_path):
         from utils.tui_actions import LogModal
@@ -401,9 +510,14 @@ class TestTuiActions:
             await pilot.pause()
             # view is filtered; jump prev wraps to the LAST match
             await screen.action_prev_match()
-            assert screen.match_index >= 0
-            ctx = screen._match_context(screen.match_positions[screen.match_index])
-            assert "HIT" in " ".join(ctx)
+            assert screen.match_index == 1
+            view = screen.query_one("#log-view")
+            shown = "".join(strip.text for strip in view.lines)
+            assert "HIT" in shown
+            # the term survives the jump: a second jump still works
+            await screen.action_next_match()
+            assert screen.match_index == len(screen.match_positions) - 1 \
+                or screen.match_index == 0
 
     async def test_q_binding_dismisses(self, tmp_path):
         from utils.tui_actions import LogModal
@@ -1467,7 +1581,7 @@ class TestContextKeyBar:
             screen.query_one("#log-search").focus()
             await pilot.pause()
             text = self._keybar_text(screen)
-            assert "Apply" in text and "Done" in text
+            assert "Jump" in text and "Done" in text
             assert "Search" not in text
 
 
