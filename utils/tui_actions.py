@@ -1013,7 +1013,8 @@ class LogModal(ModalScreen[None]):
         self._write_lines(self.lines)
         self._update_status()
 
-    def _write_lines(self, lines: List[str]) -> None:
+    def _write_lines(self, lines: List[Any]) -> None:
+        """Write lines (str or Text renderables) into the log view."""
         view = self.query_one("#log-view", RichLog)
         view.clear()
         for line in lines:
