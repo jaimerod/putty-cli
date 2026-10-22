@@ -17,6 +17,7 @@ from utils.putty_parse_util import parse_putty_reg
 from utils.putty_reg_write_util import (
     MAX_BACKUPS,
     RegEditError,
+    delete_session,
     edit_session_values,
     reg_file_stamp,
 )
@@ -391,4 +392,91 @@ class TestRecentsRename:
     def test_rename_entry_missing_file_ok(self, tmp_path):
         from utils.recent_sessions_util import rename_entry
         rename_entry(tmp_path / "nope", "a", "b")   # no crash, no file
+        assert not (tmp_path / "nope").exists()
+
+
+class TestDeleting:
+    def test_delete_removes_section_and_separator(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before_text = reg.read_bytes().decode("utf-16")
+        result = delete_session(
+            reg, "prod-web-1", expect_stamp=reg_file_stamp(reg))
+        after_text = reg.read_bytes().decode("utf-16")
+
+        parsed = parse_putty_reg(reg)
+        assert "prod-web-1" not in parsed
+        assert parsed["prod-db"]["UserName"] == "postgres"
+        assert '"ssh-rsa@22:10.0.0.1"="0x23,aa,bb"' in after_text
+        # structure: exactly one blank line between sections
+        assert "\r\n\r\n\r\n" not in after_text
+        assert result.name == "" and result.session_values == {}
+        diff = reg_line_diff(before_text, after_text)
+        # header + 4 value lines + the trailing blank separator
+        assert [d[:1] for d in diff] == ["-", "-", "-", "-", "-", "-"]
+
+    def test_delete_file_last_section_takes_prior_blank(self, tmp_path):
+        reg = make_reg(tmp_path)
+        delete_session(reg, "prod-db", expect_stamp=reg_file_stamp(reg))
+        text = reg.read_bytes().decode("utf-16")
+        assert not text.rstrip("\r\n").endswith("\r\n\r\n")
+        parsed = parse_putty_reg(reg)
+        assert "prod-db" not in parsed
+        assert parsed["prod-web-1"]["UserName"] == "deploy"
+
+    def test_delete_only_session_leaves_header(self, tmp_path):
+        """Deleting the ONLY session: the file keeps its regedit header
+        line and nothing else; parses to an empty dict."""
+        single = ("Windows Registry Editor Version 5.00\r\n\r\n"
+                  "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\"
+                  "Sessions\\only]\r\n\"HostName\"=\"h\"\r\n")
+        reg = make_reg(tmp_path, text=single)
+        delete_session(reg, "only", expect_stamp=reg_file_stamp(reg))
+        after = reg.read_bytes().decode("utf-16")
+        assert parse_putty_reg(reg) == {}
+        assert "Windows Registry Editor Version 5.00" in after
+        assert "[HKEY" not in after
+
+    def test_delete_unknown_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="not in the file"):
+            delete_session(reg, "ghost", expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_delete_stamp_guard(self, tmp_path):
+        reg = make_reg(tmp_path)
+        stamp = reg_file_stamp(reg)
+        # someone re-exported on the Windows side after the dialog
+        reg.write_bytes(
+            b"\xff\xfe" + SAMPLE.replace(
+                "postgres", "otheruser").encode("utf-16-le"))
+        expected = reg.read_bytes()
+        with pytest.raises(RegEditError, match="changed on disk"):
+            delete_session(reg, "prod-db", expect_stamp=stamp)
+        assert reg.read_bytes() == expected
+
+    def test_delete_backs_up_first(self, tmp_path):
+        reg = make_reg(tmp_path)
+        stamp = reg_file_stamp(reg)
+        result = delete_session(reg, "prod-db", expect_stamp=stamp)
+        assert result.backup_path is not None
+        bak = parse_putty_reg(result.backup_path)
+        assert "prod-db" in bak   # the backup still has it
+
+
+class TestRecentsRemove:
+    def test_remove_entry_drops_only_that_name(self, tmp_path):
+        import time
+
+        from utils.recent_sessions_util import remove_entry
+        path = tmp_path / "recents"
+        ts = int(time.time())
+        path.write_text(f"gone\t{ts}\t0\nkeep\t{ts - 9}\n", encoding="utf-8")
+        remove_entry(path, "gone")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert lines == [f"keep\t{ts - 9}"]
+
+    def test_remove_entry_missing_file_ok(self, tmp_path):
+        from utils.recent_sessions_util import remove_entry
+        remove_entry(tmp_path / "nope", "x")
         assert not (tmp_path / "nope").exists()

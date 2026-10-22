@@ -165,6 +165,42 @@ def rename_entry(recent_file: Path, old_name: str, new_name: str) -> None:
                 pass
 
 
+def remove_entry(recent_file: Path, old_name: str) -> None:
+    """Drop a session's lines from the recents file (after a Delete).
+    Atomic write; silently skips a missing file."""
+    if not recent_file.is_file():
+        return
+    try:
+        lines = recent_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    out = []
+    for line in lines:
+        parsed = _parse_line(line)
+        if parsed is not None and str(parsed["name"]) != old_name:
+            out.append(_serialize(parsed))
+    if out == lines:
+        return
+    text = "\n".join(out) + "\n"
+    import tempfile
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(recent_file.parent), prefix=".putty_recent_")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_path, recent_file)
+        tmp_path = None
+    except OSError:  # nosec B110 - best-effort, never fatal
+        pass
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
 def format_relative_time(ts: Optional[int]) -> str:
     """'5m ago', '2h ago', '3d ago', or '' for unknown."""
     if ts is None:

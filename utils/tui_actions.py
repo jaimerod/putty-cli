@@ -301,6 +301,7 @@ class SessionActionMenu(ModalScreen[Optional[str]]):
         ("Copy ssh command", "copy"),
         ("View logs", "logs"),
         ("Edit settings", "edit"),
+        ("Delete", "delete"),
     ]
 
     def __init__(self, session_name: str, cursor: tuple[int, int],
@@ -1159,4 +1160,129 @@ class LogModal(ModalScreen[None]):
             await self.action_dismiss_dialog()
 
     async def action_dismiss_dialog(self, result: object = None) -> None:
+        self.dismiss(None)
+
+
+class DeleteConfirmModal(ModalScreen[Optional[Dict[str, Any]]]):
+    """FAR confirmation dialog: Deletes a session from the .reg export.
+
+    Destructive action, so the dialog defaults its focus to CANCEL;
+    y confirms, Esc/q/n cancel. Dismiss value: {"delete": True} on
+    confirm, None on cancel. The actual removal runs in
+    putty_reg_write_util.delete_session with the usual rails (stamp
+    guard, timestamped .bak, atomic write, re-parse validations).
+    """
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("q", "cancel", "Cancel"),
+        ("n", "cancel", "Cancel"),
+        ("y", "confirm", "Delete"),
+    ]
+
+    DEFAULT_CSS = f"""
+    DeleteConfirmModal {{ background: transparent; }}
+
+    #del-shadow {{
+        position: absolute;
+        width: 0;
+        height: 0;
+        background: {ACTIVE_PALETTE.shadow};
+        color: {ACTIVE_PALETTE.dim};
+        layer: shadow;
+    }}
+
+    #del-box {{
+        layout: vertical;
+        background: {ACTIVE_PALETTE.popup_bg};
+        border: round {ACTIVE_PALETTE.frame};
+        width: 50;
+        height: auto;
+        padding: 0;
+        layer: window;
+    }}
+
+    #del-title {{
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
+        text-style: bold;
+        padding: 0 2;
+        height: 1;
+        width: auto;
+    }}
+
+    #del-question {{
+        color: {ACTIVE_PALETTE.popup_text};
+        background: {ACTIVE_PALETTE.popup_bg};
+        padding: 0 2;
+        height: 1;
+        width: auto;
+    }}
+
+    #del-note {{
+        color: {ACTIVE_PALETTE.dim};
+        background: {ACTIVE_PALETTE.popup_bg};
+        padding: 0 2;
+        height: 1;
+        width: auto;
+    }}
+
+    #del-buttons {{
+        height: 1;
+        width: 100%;
+        layout: horizontal;
+    }}
+    """
+
+    def __init__(self, session_display: str, host: str = "",
+                 **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._session = session_display
+        self._host = host.strip()
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="del-shadow", markup=False)
+        with Vertical(id="del-box"):
+            yield Label(self._session, id="del-title")
+            host_part = f", host: {self._host}" if self._host else ""
+            yield Static(f"Delete this connection{host_part} from the "
+                         ".reg export?", id="del-question", markup=False)
+            yield Static("Connection logs under the old name stop "
+                         "matching; a .bak backup is saved.",
+                         id="del-note", markup=False)
+            with Horizontal(id="del-buttons"):
+                yield _FarFlatButton("Delete", "screen.confirm")
+                yield _FarFlatButton("Cancel", "screen.cancel")
+
+    def on_mount(self) -> None:
+        size = self.size
+        box_h = 7  # title + question + note + buttons + frame
+        self.query_one("#del-box", Vertical).styles.offset = (
+            max(0, (size.width - 50) // 2), max(0, (size.height - box_h) // 2))
+        # destructive: focus starts on CANCEL (no accidental Enters)
+        self.call_after_refresh(self._initial_focus)
+
+    def _initial_focus(self) -> None:
+        from textual.widgets import Static as _Static
+        cancel = next(w for w in self.query(_Static)
+                      if "Cancel" in str(w.render()))
+        cancel.focus()
+        self.call_after_refresh(self._sync_shadow)
+
+    def _sync_shadow(self) -> None:
+        try:
+            box = self.query_one("#del-box", Vertical)
+            shadow = self.query_one("#del-shadow", Static)
+        except Exception:  # noqa: BLE001 - widgets not mounted yet
+            return
+        _sync_far_shadow(box, shadow, self._underlying_screen)
+
+    @property
+    def _underlying_screen(self) -> Any:
+        return underlying_browser_screen(self)
+
+    async def action_confirm(self) -> None:
+        self.dismiss({"delete": True})
+
+    async def action_cancel(self) -> None:
         self.dismiss(None)

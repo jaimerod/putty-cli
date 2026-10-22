@@ -30,10 +30,11 @@ from .far_style import (
 )
 from .putty_reg_write_util import (
     RegEditError,
+    delete_session,
     edit_session_values,
     reg_file_stamp,
 )
-from .recent_sessions_util import format_relative_time, rename_entry
+from .recent_sessions_util import format_relative_time, remove_entry, rename_entry
 from .ssh_command_util import build_ssh_command
 from .titlecase_util import smart_title, unquote_display
 
@@ -266,9 +267,9 @@ class SessionBrowser(App[int]):
         # on top, so their own Enter keys still work)
         Binding("enter", "connect", "Connect", priority=True),
         Binding("p", "ping", "Ping"),
-        Binding("y", "copy", "Copy Command"),
         Binding("l", "logs", "View Session Log"),
         Binding("e", "edit", "Edit"),
+        Binding("d", "delete", "Delete"),
         Binding("escape", "blur_filter", "List"),
     ]
 
@@ -342,7 +343,7 @@ class SessionBrowser(App[int]):
         yield Static("", id="status")
         yield FARKeyBar(
             [("Enter", "Connect"), ("/", "Find"), ("Tab", "Pane"),
-             ("e", "Edit"), ("p", "Ping"), ("y", "Copy"), ("l", "Log"),
+             ("e", "Edit"), ("d", "Delete"), ("p", "Ping"), ("l", "Log"),
              ("q", "Quit")],
             id="keybar",
         )
@@ -350,8 +351,8 @@ class SessionBrowser(App[int]):
     KEYBAR_LIST = [
         ("Enter", "Connect", "connect"),
         ("/", "Find", "focus_filter"), ("Tab", "Pane", "next_pane"),
-        ("e", "Edit", "edit"), ("p", "Ping", "ping"),
-        ("y", "Copy", "copy"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
+        ("e", "Edit", "edit"), ("d", "Delete", "delete"),
+        ("p", "Ping", "ping"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
     ]
     KEYBAR_FILTER = [
         ("Enter", "Pick+Connect", None), ("Esc", "Back to list", "blur_filter"),
@@ -367,6 +368,9 @@ class SessionBrowser(App[int]):
     ]
     KEYBAR_PING = [
         ("Esc", "Close", None), ("q", "Close", None),
+    ]
+    KEYBAR_DELETE = [
+        ("y", "Delete", None), ("Esc", "Cancel", None),
     ]
 
     def _set_keybar(self, entries: List[Tuple]) -> None:
@@ -593,7 +597,65 @@ class SessionBrowser(App[int]):
             await self.action_logs()
         elif action == "edit":
             await self._open_edit_modal(name)
+        elif action == "delete":
+            await self._open_delete_modal(name)
         # None = cancelled: nothing to do
+
+    async def _open_delete_modal(self, session_name: str) -> None:
+        """FAR confirm dialog; the deletion runs through the guarded
+        writer once confirmed."""
+        from .tui_actions import DeleteConfirmModal
+        session = self.usable.get(session_name)
+        if session is None:
+            return
+        if self.reg_path is None:
+            self.status_message = "no .reg file to edit"
+            self._update_status()
+            return
+        self._edit_stamp = reg_file_stamp(self.reg_path)
+        self._set_keybar(self.KEYBAR_DELETE)
+        modal = DeleteConfirmModal(
+            unquote_display(session_name),
+            host=session.get("HostName", ""))
+
+        def on_result(payload: Optional[Dict[str, Any]]) -> None:
+            self._set_keybar(self.KEYBAR_LIST)
+            self.call_later(self._delete_confirmed, payload, session_name)
+
+        self.push_screen(modal, callback=on_result)
+
+    async def _delete_confirmed(
+        self, payload: Optional[Dict[str, Any]], session_name: str,
+    ) -> None:
+        if not payload or not payload.get("delete"):
+            self.status_message = "delete cancelled"
+            self._update_status()
+            return
+        reg_path = self.reg_path
+        if reg_path is None:  # guarded when the dialog opened
+            self.status_message = "no .reg file to edit"
+            self._update_status()
+            return
+        try:
+            result = delete_session(
+                reg_path, session_name, expect_stamp=self._edit_stamp)
+        except RegEditError as e:
+            self.status_message = f"✗ not deleted: {e}"
+            self._update_status()
+            return
+        self.usable.pop(session_name, None)
+        self.recent_names = [n for n in self.recent_names
+                             if n != session_name]
+        self.recent_entries = {k: v for k, v in self.recent_entries.items()
+                               if k != session_name}
+        self.selected_name = None
+        if self.recent_file is not None:
+            remove_entry(self.recent_file, session_name)
+        self._rebuild_rows()
+        backup = result.backup_path.name if result.backup_path \
+            else "no backup"
+        self.status_message = f"deleted ✓ (backup: {backup})"
+        self._update_status()
 
     async def _open_edit_modal(self, session_name: str) -> None:
         """FAR-style edit dialog over the browser; saves via the surgical
@@ -695,11 +757,17 @@ class SessionBrowser(App[int]):
         """Disable bindings while a modal/log screen is active so the
         modal's own widgets and keys keep working (also keeps Enter/e/p
         from opening dialogs underneath or behind an open screen)."""
-        if action in ("connect", "edit", "ping"):
-            from .tui_actions import EditSessionModal, LogModal, PingModal, SessionActionMenu
+        if action in ("connect", "edit", "ping", "delete"):
+            from .tui_actions import (
+                DeleteConfirmModal,
+                EditSessionModal,
+                LogModal,
+                PingModal,
+                SessionActionMenu,
+            )
             return type(self.screen) not in (
                 SessionActionMenu, LogModal, EditSessionModal,
-                PingModal)
+                PingModal, DeleteConfirmModal)
         return True
 
     async def action_quit(self) -> None:
@@ -789,6 +857,15 @@ class SessionBrowser(App[int]):
         else:
             self.status_message = "copy failed"
         self._update_status()
+
+    async def action_delete(self) -> None:
+        """d: confirm-then-delete the highlighted session."""
+        sel = self._selected_session()
+        if sel is None:
+            self.status_message = "no session highlighted"
+            self._update_status()
+            return
+        await self._open_delete_modal(sel[0])
 
     async def action_edit(self) -> None:
         """e: open the edit dialog for the highlighted session."""

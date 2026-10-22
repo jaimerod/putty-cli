@@ -1276,10 +1276,8 @@ class TestSessionActionMenu:
             await pilot.press("up")
             await pilot.pause()
             assert menu._index == 0
-            await pilot.press("down")
-            await pilot.press("down")
-            await pilot.press("down")
-            await pilot.press("down")
+            for _ in range(len(menu.ITEMS) - 1):
+                await pilot.press("down")
             await pilot.pause()
             assert menu._index == len(menu.ITEMS) - 1
 
@@ -2220,3 +2218,96 @@ class TestLogMarkup:
                 or list(match_row[0])
             assert any("bold" == str(seg.style) for seg in segs), \
                 "the match row is REALLY bold"
+
+
+class TestDeleteFlow:
+    """Delete: d / right-click menu; y/N confirm; guarded writer."""
+
+    SESSION = {"HostName": "a.example.com", "UserName": "ops",
+               "PortNumber": "2222", "Protocol": "ssh"}
+    NAME = "prod-web-1"
+
+    def _setup(self, tmp_path):
+        lines = [
+            "Windows Registry Editor Version 5.00", "",
+            "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\"
+            f"{self.NAME}]",
+        ]
+        for key, value in self.SESSION.items():
+            if key == "PortNumber":
+                lines.append('"PortNumber"=dword:%08x' % int(value))
+            else:
+                lines.append('"%s"="%s"' % (key, value))
+        lines.append("")
+        lines.append("[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY"
+                     "\\Sessions\\other]")
+        lines.append('"HostName"="o.example.com"')
+        reg = tmp_path / "putty.reg"
+        reg.write_bytes(b"\xff\xfe" + ("\r\n".join(lines) + "\r\n")
+                        .encode("utf-16-le"))
+        recents = tmp_path / "recents"
+        recents.write_text(f"{self.NAME}\t1792645829\t0\nother\n",
+                           encoding="utf-8")
+        app = SessionBrowser(
+            {self.NAME: dict(self.SESSION), "other": {"HostName": "o"}},
+            [self.NAME], {self.NAME: {"name": self.NAME}}, reg,
+            recent_file=recents)
+        return app, reg
+
+    async def test_d_opens_confirm_dialog(self, tmp_path, monkeypatch):
+        from utils.far_style import FARKeyBar
+        from utils.tui_actions import DeleteConfirmModal
+
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            # the footer replaces Copy with Delete
+            text = app.query_one("#keybar", FARKeyBar).bar_text()
+            assert "d Delete" in text and "Copy" not in text
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmModal)
+            # destructive: focus starts on CANCEL
+            assert isinstance(app.focused, object)
+            focused = app.focused
+            assert "Cancel" in str(focused.render())
+
+    async def test_confirm_y_deletes_purges_recents(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+        from utils.recent_sessions_util import load_recent_entries
+
+        app, reg = self._setup(tmp_path)
+        recents = app.recent_file
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            await pilot.press("y")
+            for _ in range(4):
+                await pilot.pause()
+            parsed = parse_putty_reg(reg)
+            assert self.NAME not in parsed and "other" in parsed
+            assert self.NAME not in app.usable
+            assert app.recent_names == []
+            assert load_recent_entries(recents).keys() == {"other"}
+            assert "deleted" in app.status_message
+            # rows rebuilt without the deleted session
+            names = [c.row.name for c in app.query_one("#sessions").children]
+            assert self.NAME not in names
+
+    async def test_esc_cancels_delete(self, tmp_path):
+        from utils.putty_parse_util import parse_putty_reg
+
+        app, reg = self._setup(tmp_path)
+        before = reg.read_bytes()
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert reg.read_bytes() == before        # file untouched
+            assert parse_putty_reg(reg)[self.NAME]   # session remains
+            assert "delete cancelled" in app.status_message
+            from utils.tui_actions import DeleteConfirmModal
+            assert not isinstance(app.screen, DeleteConfirmModal)
