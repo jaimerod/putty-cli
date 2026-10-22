@@ -923,6 +923,57 @@ class TestDetailPane:
             height_b = app.query_one("#detail-command").region.height
             assert height_a == height_b == 3
 
+    async def test_connect_updates_recent_pane_immediately(self, tmp_path):
+        """After a connect, the RECENT pane shows the session moved to
+        the top with fresh metadata - WITHOUT closing the browser."""
+        import time
+
+        lines = [
+            "Windows Registry Editor Version 5.00", "",
+            "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\"
+            "solo]",
+            '"HostName"="s.example.com"', "",
+            "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\"
+            "other]",
+            '"HostName"="o.example.com"',
+        ]
+        reg = tmp_path / "putty.reg"
+        reg.write_bytes(b"\xff\xfe" + ("\r\n".join(lines) + "\r\n")
+                        .encode("utf-16-le"))
+        recents = tmp_path / "recents"
+        old_ts = int(time.time()) - 7 * 86400     # a week ago
+        recents.write_text(f"other\t{old_ts}\t0\n", encoding="utf-8")
+
+        def callback(name: str) -> None:      # mimic putty.py's recording
+            recents.write_text(
+                f"solo\t{int(time.time())}\t0\nother\t{old_ts}\t0\n",
+                encoding="utf-8")
+
+        app = SessionBrowser(
+            {"solo": {"HostName": "s.example.com"},
+             "other": {"HostName": "o.example.com"}},
+            ["other", "solo"], {"other": {"ts": old_ts}}, reg,
+            connect_callback=callback, recent_file=recents)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            names_before = [c.row.name
+                            for c in app.query_one("#recents").children]
+            assert names_before == ["other", "solo"]   # launch order
+            # highlight solo in the ALL pane and connect
+            sessions = app.query_one("#sessions")
+            sessions.index = next(
+                i for i, r in enumerate(app.filtered_rows) if r.name == "solo")
+            await pilot.pause()
+            await pilot.press("enter")
+            for _ in range(3):
+                await pilot.pause()
+            names = [c.row.name
+                     for c in app.query_one("#recents").children]
+            assert names == ["solo", "other"]          # reordered live
+            first = app.query_one("#recents").children[0]
+            assert "just now" in first.row.display     # fresh metadata
+            assert "connected" in app.status_message
+
     async def test_placeholder_when_nothing_highlightable(self):
         app = SessionBrowser(USABLE, [], {}, None)
         async with app.run_test() as pilot:

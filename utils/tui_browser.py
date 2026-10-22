@@ -780,6 +780,20 @@ class SessionBrowser(App[int]):
             return None
         return row.name, self.usable[row.name]
 
+    def _reload_recents(self) -> None:
+        """Re-read the recents file and refresh the RECENT pane: the
+        connect callback updated the file inside the suspend; without
+        this the pane stays stale until a restart."""
+        if self.recent_file is None:
+            return
+        from .recent_sessions_util import load_recent_entries, load_recent_sessions
+        try:
+            self.recent_names = load_recent_sessions(
+                self.recent_file, self.usable)
+            self.recent_entries = load_recent_entries(self.recent_file)
+        except Exception:  # nosec B110 - best-effort reload
+            pass
+
     async def action_connect(self) -> None:
         sel = self._selected_session()
         if sel is None:
@@ -797,6 +811,9 @@ class SessionBrowser(App[int]):
         except SuspendNotSupported:
             if self.connect_callback:
                 self.connect_callback(name)
+        # putty.py's callback recorded this connect: show it NOW
+        self._reload_recents()
+        self._rebuild_rows()
         self.status_message = f"connected: {unquote_display(name)}"
         self._update_status()
 
