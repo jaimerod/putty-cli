@@ -305,3 +305,90 @@ class TestStampsAndParseParity:
         expect = h.sha1(reg.read_bytes(),
                         usedforsecurity=False).hexdigest()
         assert reg_file_stamp(reg) == expect
+
+
+class TestRenaming:
+    def test_rename_rewrites_header_line_only(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before_text = reg.read_bytes().decode("utf-16")
+        result = edit_session_values(
+            reg, "prod-web-1", {}, expect_stamp=reg_file_stamp(reg),
+            rename_to="Legacy Web 1")
+        after_text = reg.read_bytes().decode("utf-16")
+        # exactly one line differs: the section header (URL-quoted)
+        assert reg_line_diff(before_text, after_text) == [
+            '-[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\'
+            'prod-web-1]',
+            '+[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\'
+            'Legacy%20Web%201]',
+        ]
+        parsed = parse_putty_reg(reg)
+        assert "prod-web-1" not in parsed
+        assert parsed["Legacy%20Web%201"]["UserName"] == "deploy"
+        assert result.name == "Legacy%20Web%201"
+
+    def test_rename_with_value_edit_together(self, tmp_path):
+        reg = make_reg(tmp_path)
+        result = edit_session_values(
+            reg, "prod-db", {"HostName": "db2.example.com"},
+            expect_stamp=reg_file_stamp(reg), rename_to="prod-db-v2")
+        parsed = parse_putty_reg(reg)
+        assert "prod-db-v2" in parsed and "prod-db" not in parsed
+        assert parsed["prod-db-v2"]["HostName"] == "db2.example.com"
+        assert result.name == "prod-db-v2"
+
+    def test_rename_to_existing_session_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="already exists"):
+            edit_session_values(
+                reg, "prod-db", {}, expect_stamp=reg_file_stamp(reg),
+                rename_to="prod-web-1")
+        assert reg.read_bytes() == before
+
+    def test_rename_noop_when_same_after_quoting(self, tmp_path):
+        """Typing the same name (raw vs decoded) = edits only."""
+        reg = make_reg(tmp_path)
+        result = edit_session_values(
+            reg, "prod-web-1", {"UserName": "dev"},
+            expect_stamp=reg_file_stamp(reg), rename_to="prod-web-1")
+        assert result.name == "prod-web-1"
+        assert parse_putty_reg(reg)["prod-web-1"]["UserName"] == "dev"
+        # the header line unchanged
+        assert "\\Sessions\\prod-web-1]" in reg.read_bytes().decode("utf-16")
+
+    def test_rename_url_quotes_and_round_trips(self, tmp_path):
+        reg = make_reg(tmp_path)
+        edit_session_values(
+            reg, "prod-web-1", {}, expect_stamp=reg_file_stamp(reg),
+            rename_to='My "Cool" Server 100% up')
+        quoted = "Sessions\\My%20%22Cool%22%20Server%20100%25%20up]"
+        assert quoted in reg.read_bytes().decode("utf-16")
+        from utils.titlecase_util import unquote_display
+
+        parsed = parse_putty_reg(reg)
+        key = [k for k in parsed if k.startswith("My%20")][0]
+        assert unquote_display(key) == 'My "Cool" Server 100% up'
+        assert parsed[key]["UserName"] == "deploy"   # values intact
+
+
+class TestRecentsRename:
+    def test_rename_entry_preserves_metadata(self, tmp_path):
+        import time
+
+        from utils.recent_sessions_util import rename_entry
+        path = tmp_path / "recents"
+        ts = int(time.time())
+        path.write_text(
+            f"old-name\t{ts}\t0\nother\nthird\t{ts - 5}\t255\n",
+            encoding="utf-8")
+        rename_entry(path, "old-name", "new-name")
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == f"new-name\t{ts}\t0"
+        assert lines[1] == "other"
+        assert lines[2] == f"third\t{ts - 5}\t255"
+
+    def test_rename_entry_missing_file_ok(self, tmp_path):
+        from utils.recent_sessions_util import rename_entry
+        rename_entry(tmp_path / "nope", "a", "b")   # no crash, no file
+        assert not (tmp_path / "nope").exists()

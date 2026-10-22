@@ -29,6 +29,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 from .putty_parse_util import SESSION_HEADER_RE, _parse_content
 
@@ -50,8 +51,16 @@ class RegEditError(RuntimeError):
 @dataclass(frozen=True)
 class RegEditResult:
     """Outcome of a successful .reg edit."""
+    name: str                          # the session's name AFTER the edit
     session_values: Dict[str, str]     # edited session, re-parsed
     backup_path: Optional[Path]
+
+
+def quote_reg_name(name: str) -> str:
+    """The URL-quoted form PuTTY gives session keys in .reg exports
+    (the inverse of unquote_display). Evidence from real exports:
+    spaces/'/' etc. -> %XX, while '(',')','-','_','.' stay raw."""
+    return quote(name, safe="()-.!~*'_")
 
 
 def reg_file_stamp(reg_path: Optional[Path]) -> Optional[str]:
@@ -198,18 +207,26 @@ def _edit_lines(lines: List[str], session_name: str,
 
 
 def _validate_roundtrip(old: str, new: str, session_name: str,
-                        changes: Dict[str, str]) -> Dict[str, str]:
+                        changes: Dict[str, str],
+                        renamed: Optional[str] = None
+                        ) -> Dict[str, str]:
     """Re-parse both texts and diff them. Returns the edited session's
     parsed values; raises RegEditError on ANY unexpected difference."""
     old_sessions = _parse_content(old)
     new_sessions = _parse_content(new)
+    final_name = renamed or session_name
 
-    if set(old_sessions) != set(new_sessions):
+    expected_keys = set(old_sessions)
+    if renamed:
+        expected_keys -= {session_name}
+        expected_keys.add(final_name)
+    if set(new_sessions) != expected_keys:
         raise RegEditError(
             "post-edit validation failed: session set changed")
     for sname, values in new_sessions.items():
-        expected = dict(old_sessions[sname])
-        if sname == session_name:
+        source = session_name if sname == final_name else sname
+        expected = dict(old_sessions[source])
+        if sname == final_name:
             decoded = dict(changes)
             for k, v in changes.items():
                 if k == "PortNumber":
@@ -219,7 +236,26 @@ def _validate_roundtrip(old: str, new: str, session_name: str,
             raise RegEditError(
                 f"post-edit validation failed: values of {sname!r} differ")
 
-    return new_sessions[session_name]
+    return new_sessions[final_name]
+
+
+def _rename_section(lines: List[str], session_name: str,
+                    new_key: str) -> List[str]:
+    """Rewrite ONLY the section header line: ...Sessions\\<new_key>]."""
+    start = None
+    for i, line in enumerate(lines):
+        m = SESSION_HEADER_RE.match(line.strip())
+        if m and m.group(1).strip() == session_name:
+            start = i
+            break
+    if start is None:
+        raise RegEditError(f"session {session_name!r} is not in the file")
+    out = list(lines)
+    ending = _line_ending(out[start])
+    stripped = out[start].strip()
+    prefix = stripped[:stripped.rfind(session_name)]
+    out[start] = prefix + new_key + "]" + ending
+    return out
 
 
 def edit_session_values(
@@ -227,19 +263,32 @@ def edit_session_values(
     session_name: str,
     changes: Dict[str, str],
     expect_stamp: Optional[str] = None,
+    rename_to: Optional[str] = None,
 ) -> RegEditResult:
-    """Edit one session's values in an existing .reg export.
+    """Edit one session's values, and optionally RENAME the session
+    (the section key in the .reg export).
 
-    Only the named session's value lines are touched; the file is
-    never regenerated end-to-end. Raises RegEditError (leaving the
+    Only the named session's header/value lines are touched; the file
+    is never regenerated end-to-end. Raises RegEditError (leaving the
     file untouched) whenever any guard fails:
       - values contain quotes/newlines or non-editable keys
       - the file bytes changed since `expect_stamp` was taken
       - the old text does not round-trip through decode/encode
+      - the target of a rename already exists
       - the in-memory re-parse validation finds unexpected differences
       - the post-write verification of the real file fails
     """
-    if not changes:
+    quoted_new: Optional[str] = None
+    if rename_to is not None:
+        rename_to = rename_to.strip()
+        if "\r" in rename_to or "\n" in rename_to:
+            raise RegEditError(f"malformed session name {rename_to!r}")
+        quoted_new = quote_reg_name(rename_to)
+        if not quoted_new:
+            raise RegEditError("session name must not be empty")
+        if quoted_new == session_name:
+            quoted_new = None  # same name once quoted: no rename
+    if not changes and quoted_new is None:
         raise RegEditError("nothing to change")
     unknown = set(changes) - EDITABLE_KEYS
     if unknown:
@@ -264,11 +313,20 @@ def edit_session_values(
             "the .reg file does not round-trip its encoding - refusing "
             "to write")
 
+    if quoted_new is not None and quoted_new in _parse_content(text):
+        raise RegEditError(
+            f"a session named {rename_to!r} already exists - rename "
+            "refused")
+
     new_lines = _edit_lines(text.splitlines(keepends=True),
                             session_name, changes)
+    if quoted_new is not None:
+        new_lines = _rename_section(new_lines, session_name, quoted_new)
     new_text = "".join(new_lines)
 
-    edited_values = _validate_roundtrip(text, new_text, session_name, changes)
+    edited_values = _validate_roundtrip(
+        text, new_text, session_name, changes, renamed=quoted_new)
+    final_name = quoted_new or session_name
 
     encoded = new_text.encode(codec)
     if encoded.decode(codec) != new_text:
@@ -294,13 +352,13 @@ def edit_session_values(
     # exactly the validated result
     final_raw = reg_path.read_bytes()
     final_sessions = _parse_content(final_raw.decode(codec, errors="replace"))
-    if final_sessions.get(session_name) != edited_values:
+    if final_sessions.get(final_name) != edited_values:
         raise RegEditError(
             "the written file did not verify on re-read - restore the "
             f"backup manually ({backup_path})")
 
     return RegEditResult(
-        session_values=edited_values, backup_path=backup_path)
+        name=final_name, session_values=edited_values, backup_path=backup_path)
 
 
 def _backup(reg_path: Path) -> Optional[Path]:

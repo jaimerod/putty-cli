@@ -1759,7 +1759,7 @@ class TestEditModal:
             # fields are the focus landing target (first field); note
             # app.focused (not *:focus) - a screen stack keeps every
             # screen's last-focused widget matching the :focus pseudo
-            assert app.focused.id == "edit-HostName"
+            assert app.focused.id == "edit-Name"
 
     async def test_save_writes_reg_and_refreshes_browser(self, tmp_path):
         from utils.putty_parse_util import parse_putty_reg
@@ -1800,7 +1800,7 @@ class TestEditModal:
             await pilot.pause()
             assert reg.read_bytes() == before          # nothing written
             assert "edit cancelled" in app.status_message
-            assert app.query_one("*:focus").id != "edit-HostName"
+            assert app.query_one("*:focus").id != "edit-Name"
 
     async def test_port_validation_stays_open(self, tmp_path):
         app, reg = self._setup(tmp_path)
@@ -1925,7 +1925,7 @@ class TestEditModal:
             await pilot.press("e")
             await pilot.pause()
             assert isinstance(app.screen, EditSessionModal)
-            assert app.focused.id == "edit-HostName"
+            assert app.focused.id == "edit-Name"   # the Name field is first
 
     async def test_e_gated_while_action_menu_open(self, tmp_path):
         """e must not open the edit dialog underneath/behind an open
@@ -2006,6 +2006,59 @@ class TestEditModal:
             assert reg.read_bytes() == before   # nothing written
             assert app.screen is not modal      # dialog closed
             assert "edit cancelled" in app.status_message
+
+    async def test_save_with_rename_rewrites_reg_swaps_usable(self, tmp_path):
+        """Editing the Name field renames the .reg section, migrates the
+        recents file and swaps the browser's data in memory."""
+        from utils.putty_parse_util import parse_putty_reg
+        from utils.recent_sessions_util import load_recent_entries
+
+        app, reg = self._setup(tmp_path)
+        recents = tmp_path / "recents"
+        recents.write_text(f"{self.NAME}\t1792645829\t0\n", encoding="utf-8")
+        app.recent_file = recents
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            # the Name field is prefilled DECODED (spaces readable)
+            assert modal.query_one("#edit-Name", Input).value \
+                == self.NAME
+            modal.query_one("#edit-Name", Input).value = "Legacy Web 1"
+            await modal.action_save()
+            for _ in range(4):
+                await pilot.pause()
+            parsed = parse_putty_reg(reg)
+            assert "Legacy%20Web%201" in parsed and self.NAME not in parsed
+            # live data swapped, no restart needed
+            assert "Legacy%20Web%201" in app.usable
+            assert self.NAME not in app.usable
+            # recents migrated, metadata kept
+            migrated = load_recent_entries(recents)
+            assert migrated["Legacy%20Web%201"]["name"] == "Legacy%20Web%201"
+            assert migrated["Legacy%20Web%201"]["exit"] == 0
+            assert "renamed" in app.status_message
+            assert "Legacy Web 1" in [
+                r.display for r in app.rows
+                if not r.name.startswith("__")]
+
+    async def test_name_field_empty_refused(self, tmp_path):
+        from utils.tui_actions import EditSessionModal
+
+        app, reg = self._setup(tmp_path)
+        before = reg.read_bytes()
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#edit-Name", Input).value = ""
+            await modal.action_save()
+            await pilot.pause()
+            assert isinstance(app.screen, EditSessionModal)  # still open
+            assert "Name" in str(modal.query_one("#edit-error").render())
+            assert reg.read_bytes() == before   # nothing written
 
     async def test_right_click_menu_reaches_edit(self, tmp_path):
         """menu -> Edit settings -> the FAR edit dialog opens."""

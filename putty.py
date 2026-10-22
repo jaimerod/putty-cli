@@ -428,6 +428,7 @@ def run_tui_browser(
     app = SessionBrowser(
         usable, recent_sessions, recent_entries, reg_path,
         group_by_tag=group_by_tag, connect_callback=connect,
+        recent_file=None if no_record else recent_file,
     )
     app.run()
     return 0

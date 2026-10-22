@@ -17,6 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, RichLog, Static
 
 from .far_style import ACTIVE_PALETTE, FARKeyBar, KeyBarClicked
+from .titlecase_util import unquote_display
 
 
 def _tcp_probe(host: str, port: str = "22") -> Tuple[bool, str]:
@@ -466,7 +467,7 @@ class _FarFlatButton(Static, can_focus=True):
         await self.run_action(self._action)
 
 
-class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
+class EditSessionModal(ModalScreen[Optional[Dict[str, Any]]]):
     """FAR-style dialog mimicking PuTTY's connection settings.
 
     Fields cover what putty-cli consumes: HostName, UserName, Port,
@@ -593,6 +594,12 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
         yield Static("", id="edit-shadow", markup=True)
         with Vertical(id="edit-box"):
             yield Label(self.session_name, id="edit-title")
+            # the session name itself is editable: renaming rewrites the
+            # section key in the .reg (URL-quoted by the writer)
+            with Horizontal(classes="edit-row"):
+                yield Static("Name", classes="edit-label", markup=False)
+                yield Input(value=unquote_display(self.session_name),
+                            id="edit-Name")
             for label, key in self.FIELD_DEFS:
                 with Horizontal(classes="edit-row"):
                     yield Static(label, classes="edit-label", markup=False)
@@ -606,7 +613,7 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
     def on_mount(self) -> None:
         # FAR dialogs: centered over the browser underneath
         box = self.query_one("#edit-box", Vertical)
-        box_h = len(self.FIELD_DEFS) + 5  # title + error + buttons + border
+        box_h = len(self.FIELD_DEFS) + 6  # name + title + err + btns + border
         size = self.size
         box.styles.offset = (
             max(0, (size.width - 48) // 2), max(0, (size.height - box_h) // 2))
@@ -615,7 +622,7 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
         self.call_after_refresh(self._initial_focus)
 
     def _initial_focus(self) -> None:
-        self.query_one("#edit-HostName", Input).focus()
+        self.query_one("#edit-Name", Input).focus()
         self.call_after_refresh(self._sync_shadow)
 
     def _sync_shadow(self) -> None:
@@ -660,7 +667,8 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
     def _error(self, msg: str) -> None:
         self.query_one("#edit-error", Static).update(msg)
 
-    def _collect_changes(self) -> Optional[Dict[str, str]]:
+    def _collect(self) -> Optional[Dict[str, Any]]:
+        """Build the save payload; None = validation error (shown)."""
         values: Dict[str, str] = {}
         for _, key in self.FIELD_DEFS:
             values[key] = self.query_one(
@@ -671,7 +679,16 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
             self._error(str(exc))
             return None
 
-    def _changes_for(self, values: Dict[str, str]) -> Dict[str, str]:
+    def _changes_for(self, values: Dict[str, str]) -> Dict[str, Any]:
+        name = self.query_one("#edit-Name", Input).value.strip()
+        if "\r" in name or "\n" in name:
+            raise ValueError("Name: line breaks are not storable")
+        if not name:
+            raise ValueError("Name must not be empty")
+        rename_to = None
+        if name != unquote_display(self.session_name):
+            rename_to = name
+
         # defaults: PuTTY semantics (empty port = 22, protocol = ssh)
         port = values["PortNumber"] or "22"
         if not port.isdigit() or not 1 <= int(port) <= 65535:
@@ -699,13 +716,13 @@ class EditSessionModal(ModalScreen[Optional[Dict[str, str]]]):
             changes["ProxyMethod"] = "6"
         elif not jump and self._orig_method == "6":
             changes["ProxyMethod"] = "0"
-        return changes
+        return {"values": changes, "rename_to": rename_to}
 
     async def action_save(self) -> None:
-        changes = self._collect_changes()
-        if changes is None:
+        payload = self._collect()
+        if payload is None:
             return
-        self.dismiss(changes)
+        self.dismiss(payload)
 
 
 class _PingField(Static, can_focus=False):

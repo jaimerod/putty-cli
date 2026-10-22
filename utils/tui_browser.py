@@ -33,7 +33,7 @@ from .putty_reg_write_util import (
     edit_session_values,
     reg_file_stamp,
 )
-from .recent_sessions_util import format_relative_time
+from .recent_sessions_util import format_relative_time, rename_entry
 from .ssh_command_util import build_ssh_command
 from .titlecase_util import smart_title, unquote_display
 
@@ -280,6 +280,7 @@ class SessionBrowser(App[int]):
         reg_path: Optional[Path],
         group_by_tag: bool = True,
         connect_callback: Any = None,
+        recent_file: Optional[Path] = None,
     ):
         super().__init__()
         self.usable = usable
@@ -288,6 +289,7 @@ class SessionBrowser(App[int]):
         self.reg_path = reg_path
         self.group_by_tag = group_by_tag
         self.connect_callback = connect_callback  # runs after suspend()
+        self.recent_file = recent_file            # renamed on rename
         self.selected_name: Optional[str] = None
         self._last_cursor: tuple[int, int] = (0, 0)
         # two panes: #recents (top) and #sessions = the ALL pane (bottom)
@@ -615,29 +617,51 @@ class SessionBrowser(App[int]):
         self.push_screen(modal, callback=on_result)
 
     async def _edit_saved(
-        self, changes: Optional[Dict[str, str]], session_name: str,
+        self, payload: Optional[Dict[str, Any]], session_name: str,
     ) -> None:
-        if changes is None:
+        if payload is None:
             self.status_message = "edit cancelled"
-        elif not changes:
+            self._update_status()
+            return
+        rename_to = payload.get("rename_to")
+        changes = payload.get("values", {})
+        if not changes and not rename_to:
             self.status_message = "saved (nothing to change)"
-        else:
-            reg_path = self.reg_path
-            if reg_path is None:  # guarded when the dialog opened
-                self.status_message = "no .reg file to edit"
-            else:
-                try:
-                    result = edit_session_values(
-                        reg_path, session_name, changes,
-                        expect_stamp=self._edit_stamp)
-                except RegEditError as e:
-                    self.status_message = f"✗ edit not saved: {e}"
-                else:
-                    self.usable[session_name] = result.session_values
-                    self._rebuild_rows()
-                    backup = result.backup_path.name if result.backup_path \
-                        else "no backup"
-                    self.status_message = f"saved ✓ (backup: {backup})"
+            self._update_status()
+            return
+        reg_path = self.reg_path
+        if reg_path is None:  # guarded when the dialog opened
+            self.status_message = "no .reg file to edit"
+            self._update_status()
+            return
+        try:
+            result = edit_session_values(
+                reg_path, session_name, changes,
+                expect_stamp=self._edit_stamp, rename_to=rename_to)
+        except RegEditError as e:
+            self.status_message = f"✗ edit not saved: {e}"
+            self._update_status()
+            return
+        new_name = result.name
+        self.usable[new_name] = result.session_values
+        renamed = new_name != session_name
+        if renamed:
+            self.usable.pop(session_name, None)
+            self.recent_names = [new_name if n == session_name else n
+                                 for n in self.recent_names]
+            self.recent_entries = {
+                (new_name if k == session_name else k): v
+                for k, v in self.recent_entries.items()}
+            if self.recent_file is not None:
+                rename_entry(self.recent_file, session_name, new_name)
+        self._rebuild_rows()
+        backup = result.backup_path.name if result.backup_path \
+            else "no backup"
+        parts = []
+        if renamed:
+            parts.append(f"renamed: {unquote_display(new_name)}")
+        parts.append(f"saved ✓ (backup: {backup})")
+        self.status_message = " · ".join(parts)
         self._update_status()
 
     def _rebuild_rows(self) -> None:
