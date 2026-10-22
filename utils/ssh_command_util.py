@@ -220,6 +220,13 @@ def _wrap_tmux(
     Outside tmux: new-session, explicitly named (-s), with
     destroy-unattached set so a manual detach cleans it up.
     Inside tmux: new-window.
+
+    pipe-pane and set-option run TARGETLESS: they resolve to the pane
+    just created and selected. NOTE: '-t <name>' targets DO NOT WORK
+    for session names containing a dot - tmux parses 'foo.com' as
+    window 'foo' + pane 'com' ("can't find pane: com") and the session
+    silently loses its log. (Names are safe in -s/-n creation, only
+    target parsing is affected.)
     """
     timestamp = time.strftime("%Y-%m-%d_%H%M")
     log_dir = os.environ.get("PUTTY_LOG_DIR")
@@ -240,6 +247,6 @@ def _wrap_tmux(
     else:
         argv += ["new-session", "-s", name, "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";",
-                 "set-option", "-t", name, "destroy-unattached", "on", ";"]
-    argv += ["pipe-pane", "-t", name, "-o", f"cat >> {shlex.quote(log_file)}"]
+                 "set-option", "destroy-unattached", "on", ";"]
+    argv += ["pipe-pane", "-o", f"cat >> {shlex.quote(log_file)}"]
     return argv

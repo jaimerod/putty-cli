@@ -845,18 +845,20 @@ class TestMoshAndExtraArgs:
         )
         assert argv[:2] == ["tmux", "new-session"]
         assert "-d" not in argv
-        # pipe-pane targets the session by plain name
+        # pipe-pane targets the pane just created (targetless: '-t name'
+        # breaks for names containing a dot)
         pp_idx = argv.index("pipe-pane")
-        assert argv[pp_idx + 2] == "s"
+        assert "-o" == argv[pp_idx + 1] and argv[pp_idx + 2].startswith("cat >>")
         # and the argv contains NO shell (no 'sh','-c')
         assert "sh" not in argv[:3]
 
     def test_outside_tmux_names_session_explicitly(self, tmp_path, monkeypatch):
         """Regression: outside tmux, `new-session -n NAME` names only the
         window (tmux auto-names the session '0'). Session must be named
-        with -s NAME; set-option/pipe-pane use plain-name targets (the
-        '=' exact-match prefix is rejected by those commands and aborts
-        the ';' chain before pipe-pane starts)."""
+        with -s NAME; set-option/pipe-pane run TARGETLESS ('-t name'
+        breaks for dotted names: tmux parses 'foo.com' as window 'foo'
+        + pane 'com' - 'can't find pane: com' - and the ';' chain dies
+        before the pipe starts)."""
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         monkeypatch.delenv("TMUX", raising=False)
         argv, _ = build_ssh_command(
@@ -867,9 +869,10 @@ class TestMoshAndExtraArgs:
         assert argv[s_idx + 1] == "My_Session"          # session named
         assert argv[argv.index("-n") + 1] == "My_Session"
         so_idx = argv.index("set-option")
-        assert argv[so_idx + 2] == "My_Session"         # plain target (no '=')
+        assert argv[so_idx + 1] == "destroy-unattached"  # targetless
         pp_idx = argv.index("pipe-pane")
-        assert argv[pp_idx + 2] == "My_Session"         # plain target (no '=')
+        assert argv[pp_idx + 1] == "-o"                  # targetless
+        assert argv[pp_idx + 2].startswith("cat >> ")
         assert argv[argv.index("destroy-unattached") + 1] == "on"
 
     def test_inside_tmux_targets_window(self, tmp_path, monkeypatch):
@@ -881,7 +884,25 @@ class TestMoshAndExtraArgs:
         assert argv[1] == "new-window"
         assert "set-option" not in argv  # window needs no destroy-unattached
         pp_idx = argv.index("pipe-pane")
-        assert argv[pp_idx + 2] == "s"
+        assert argv[pp_idx + 1] == "-o"          # targetless (dot-safe)
+        assert argv[pp_idx + 2].startswith("cat >> ")
+
+    def test_wrap_tmux_dotted_name_gets_working_pipe(self, tmp_path,
+                                                     monkeypatch):
+        """THE BUG: 'rodriguez-jr.com' never logged - tmux read '-t
+        rodriguez-jr.com' as pane 'com'. The pipe must target the
+        current pane and survive real dotted launches."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.delenv("TMUX", raising=False)
+        argv, _ = build_ssh_command(
+            "rodriguez-jr.com", {"HostName": "rodriguez-jr.com"},
+            reg_path=tmp_path / "r.reg", tmux=True,
+        )
+        pp_idx = argv.index("pipe-pane")
+        assert argv[pp_idx:pp_idx + 2] == ["pipe-pane", "-o"]
+        assert "rodriguez-jr.com" in argv[argv.index("-s") + 1
+                                         if "-s" in argv else
+                                         argv.index("-n") + 1]
 
     def test_mosh_basic(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
