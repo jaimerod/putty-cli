@@ -38,6 +38,22 @@ USABLE = {
 class TestLogModal:
     """l: FAR dialog (scroll + filter) reading the RIGHT log folder."""
 
+    async def test_close_button_dismisses(self, tmp_path):
+        """[X] at the end of the title row dismisses the log viewer."""
+        from utils.tui_actions import LogModal
+        app = SessionBrowser({"a": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.push_screen(LogModal(tmp_path / "x.log"))
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            assert modal.query_one("#far-close").region.x > 0
+            await pilot.click("#far-close")
+            for _ in range(3):
+                await pilot.pause()
+            assert app.screen is not modal
+
     async def test_l_reads_logs_next_to_reg_file(self, tmp_path, monkeypatch):
         """Regression: connects write logs next to the .reg (the user's
         OneDrive PuTTY dir); the viewer must look THERE by default."""
@@ -1831,6 +1847,31 @@ class TestEditModal:
             assert (shadow.region.x, shadow.region.y) \
                 == (box.region.x + 2, box.region.y + 1)
             assert str(shadow.content)
+
+    async def test_close_button_rides_chrome_and_dismisses(self, tmp_path):
+        """[X] sits inline with the box's top-right border chrome and a
+        click dismisses the modal like Esc."""
+        from utils.tui_actions import EditSessionModal
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            assert isinstance(modal, EditSessionModal)
+            box = modal.query_one("#far-box")
+            close = modal.query_one("#far-close")
+            # inline with the top border, flush against the corner
+            assert close.region.y == box.region.y
+            assert close.region.x > box.region.x
+            assert close.region.x + close.region.width \
+                == box.region.x + box.region.width - 1
+            await pilot.click("#far-close")
+            for _ in range(3):
+                await pilot.pause()
+            assert app.screen is not modal
+            assert app.status_message == "edit cancelled"
 
     async def test_prefills_from_session(self, tmp_path):
         app, _reg = self._setup(tmp_path)

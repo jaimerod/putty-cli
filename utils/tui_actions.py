@@ -13,7 +13,8 @@ from textual.widgets import Input, RichLog, Rule, Static
 
 from .clipboard_util import copy_command
 from .far_dialog import (
-    FarDialogScreen, FarValueField, underlying_browser_screen,
+    FarCloseButton, FarDialogScreen, FarValueField,
+    underlying_browser_screen,
 )
 from .far_style import ACTIVE_PALETTE, FARKeyBar, KeyBarOwner
 from .net_util import run_ping
@@ -452,13 +453,26 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
     DEFAULT_CSS = f"""
     LogModal {{ background: {ACTIVE_PALETTE.bg}; }}
 
-    #log-title {{
+    #log-title-row {{
         dock: top;
+        height: 1;
+    }}
+    #log-title {{
+        width: 1fr;
         color: {ACTIVE_PALETTE.title};
         background: {ACTIVE_PALETTE.bg};
         padding: 0 1;
-        height: 1;
         text-style: bold;
+    }}
+    #log-title-row > #far-close {{
+        width: auto;
+        padding: 0 1;
+        color: {ACTIVE_PALETTE.title};
+        background: {ACTIVE_PALETTE.bg};
+    }}
+    #log-title-row > #far-close:hover {{
+        background: {ACTIVE_PALETTE.error};
+        color: {ACTIVE_PALETTE.bright};
     }}
     #log-search {{
         dock: top;
@@ -502,8 +516,10 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
     """
 
     def compose(self) -> ComposeResult:
-        yield Static(self.log_path.name, id="log-title",
-                     markup=False)
+        with Horizontal(id="log-title-row"):
+            yield Static(self.log_path.name, id="log-title",
+                         markup=False)
+            yield FarCloseButton()
         yield Input(
             placeholder="/ search this log (n next match, N previous)",
             id="log-search",

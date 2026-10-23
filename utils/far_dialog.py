@@ -139,6 +139,24 @@ def sync_far_shadow_region(region: Region, shadow: Any, underlying: Any,
     shadow.update("\n".join(dimmed))
 
 
+class FarCloseButton(Static, can_focus=False):
+    """The [X] close affordance, inline with the window chrome.
+
+    The dialog chassis positions it over the box's top-right border
+    dashes; the log viewer flows it at the end of its title row. A
+    click dismisses the modal screen, exactly like Esc (dismiss
+    result None = cancelled). markup=False is essential: [X] would
+    otherwise parse as a Rich color tag."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__("[X]", id="far-close", classes="far-close",
+                         markup=False, **kwargs)
+
+    def on_click(self, event: events.Click) -> None:
+        event.stop()
+        self.screen.dismiss(None)
+
+
 class FarValueField(Static, can_focus=False):
     """Read-only value field (Textual's Input has no read-only mode):
     a field-styled Static with a value property, set programmatically.
@@ -311,6 +329,22 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         border: none;
     }}
 
+    #far-close {{
+        position: absolute;
+        width: 3;
+        height: 1;
+        layer: window;
+        background: transparent;
+        color: {ACTIVE_PALETTE.popup_text};
+        /* parked off-screen with the box until _place() positions it
+           on the box's top-right border dashes */
+        offset: -9999 -9999;
+    }}
+    #far-close:hover {{
+        background: {ACTIVE_PALETTE.error};
+        color: {ACTIVE_PALETTE.bright};
+    }}
+
     #far-buttons {{
         height: 1;
         width: 100%;
@@ -349,6 +383,8 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
                 with Horizontal(id="far-buttons"):
                     for label, action in self.BUTTONS:
                         yield FarFlatButton(label, action)
+        # after the box in the DOM -> paints over the border dashes
+        yield FarCloseButton()
 
     def compose_body(self):
         """Rows rendered inside the dialog box."""
@@ -399,6 +435,10 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         else:
             x, y = self._popup_origin(box)
         box.styles.offset = (x, y)
+        # the [X] rides the box's top-right border dashes:
+        # 3 glyphs, flush against the corner glyph
+        self.query_one("#far-close", Static).styles.offset = (
+            x + box.region.width - 4, y)
         # the first paint after this lands the box at its final
         # position (it was parked off-screen until here)
         # the compositor map still holds the pre-offset origin here;
