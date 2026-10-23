@@ -39,20 +39,67 @@ class TestLogModal:
     """l: FAR dialog (scroll + filter) reading the RIGHT log folder."""
 
     async def test_close_button_dismisses(self, tmp_path):
-        """[X] at the end of the title row dismisses the log viewer."""
+        """[X] rides the log-view's border chrome (top-right, one dash
+        shy of the corner) and dismisses the log viewer."""
+        from utils.far_dialog import _region_text
         from utils.tui_actions import LogModal
         app = SessionBrowser({"a": {"HostName": "h"}}, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause()
+            (tmp_path / "x.log").write_text("one log line\n")
             await app.push_screen(LogModal(tmp_path / "x.log"))
             for _ in range(3):
                 await pilot.pause()
             modal = app.screen
-            assert modal.query_one("#far-close").region.x > 0
+            view = modal.query_one("#log-view")
+            close = modal.query_one("#far-close")
+            # on the box's top border, flush against the corner
+            assert close.region.y == view.region.y
+            assert close.region.x + close.region.width \
+                == view.region.x + view.region.width - 2
+            assert view.border_title == "x.log"   # caption on the border
+            # and painted on the border row, not floating elsewhere
+            caption_row = _region_text(
+                modal, view.region.x, view.region.y, view.region.width, 1)[0]
+            assert "[X]" in caption_row and "x.log" in caption_row
             await pilot.click("#far-close")
             for _ in range(3):
                 await pilot.pause()
             assert app.screen is not modal
+
+    async def test_picker_flow_restores_focus(self, tmp_path, monkeypatch):
+        """Regression: after closing a log opened VIA THE PICKER, the
+        browser pane kept no focus (Textual's restore tracks only the
+        screen directly below the dismissed one - the already-popped
+        picker), leaving hotkeys dead until a mouse click."""
+        from utils.tui_actions import LogModal, LogPickerModal
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        (logs / "2026-01-01_0900-solo.log").write_text("older\n")
+        (logs / "2026-01-02_0900-solo.log").write_text("newer\n")
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app.query_one("#sessions").index = 0
+            await pilot.pause()
+            await pilot.press("l")
+            for _ in range(2):
+                await pilot.pause()
+            assert isinstance(app.screen, LogPickerModal)
+            await pilot.press("enter")            # pick the newest
+            for _ in range(3):
+                await pilot.pause()
+            assert isinstance(app.screen, LogModal)
+            await pilot.press("escape")           # close the viewer
+            for _ in range(3):
+                await pilot.pause()
+            # focus is back on a pane, so the hotkeys keep working
+            assert app.screen.focused is not None
+            await pilot.press("l")
+            for _ in range(3):
+                await pilot.pause()
+            assert isinstance(app.screen, LogPickerModal)  # reopened
 
     async def test_l_reads_logs_next_to_reg_file(self, tmp_path, monkeypatch):
         """Regression: connects write logs next to the .reg (the user's
@@ -146,11 +193,11 @@ class TestLogModal:
             modal = app.screen
 
             def chrome():
-                title = modal.query_one("#log-title")
+                view = modal.query_one("#log-view")
                 status = modal.query_one("#log-status")
                 keybar = modal.query_one("#keybar")
-                return (str(title.render()), str(status.render()),
-                        keybar.region.y, title.region.y)
+                return (view.border_title, str(status.render()),
+                        keybar.region.y, view.region.y)
 
             before = chrome()
             lv = modal.query_one("#log-view")

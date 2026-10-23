@@ -650,24 +650,18 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
     DEFAULT_CSS = f"""
     LogModal {{ background: {ACTIVE_PALETTE.bg}; }}
 
-    #log-title-row {{
-        dock: top;
+    #far-close {{
+        position: absolute;
+        width: 3;
         height: 1;
-    }}
-    #log-title {{
-        width: 1fr;
+        background: transparent;
         color: {ACTIVE_PALETTE.title};
-        background: {ACTIVE_PALETTE.bg};
-        padding: 0 1;
-        text-style: bold;
+        /* parked off-screen until _place_close() parks it on the
+           log-view's top-right border dashes (same no-flash trick
+           as the dialog chassis) */
+        offset: -9999 -9999;
     }}
-    #log-title-row > #far-close {{
-        width: auto;
-        padding: 0 1;
-        color: {ACTIVE_PALETTE.title};
-        background: {ACTIVE_PALETTE.bg};
-    }}
-    #log-title-row > #far-close:hover {{
+    #far-close:hover {{
         background: {ACTIVE_PALETTE.error};
         color: {ACTIVE_PALETTE.bright};
     }}
@@ -678,10 +672,6 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
         border: none;
         height: 1;
         padding: 0 1;
-        /* Textual 8 docks every top-docked widget at y=0 (no stacking):
-           a 1-row top margin pushes the search below the title AND
-           reserves the space in the flow area */
-        margin: 1 0 0 0;
     }}
     #log-view {{
         border: round {ACTIVE_PALETTE.frame};
@@ -690,6 +680,10 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
         /* content inset 1 from the border, like every pane/window */
         padding: 0 1;
         height: 1fr;
+        /* the filename rides the top border, centered - the FAR.exe
+           window-caption look */
+        border-title-align: center;
+        border-title-color: {ACTIVE_PALETTE.title};
         scrollbar-size-vertical: 2;
         scrollbar-color: {ACTIVE_PALETTE.highlight_bg};
         scrollbar-background: {ACTIVE_PALETTE.bg};
@@ -713,10 +707,6 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
     """
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="log-title-row"):
-            yield Static(self.log_path.name, id="log-title",
-                         markup=False)
-            yield FarCloseButton()
         yield Input(
             placeholder="/ search this log (n next match, N previous)",
             id="log-search",
@@ -725,10 +715,31 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
                       max_lines=self.max_lines)
         yield Static("", id="log-status", markup=False)
         yield FARKeyBar(self.KEYBAR_SCROLL, id="keybar")
+        # after the view in the DOM: the [X] paints OVER the border
+        yield FarCloseButton()
 
     def on_mount(self) -> None:
+        self.query_one("#log-view", RichLog).border_title = \
+            self.log_path.name
+        self.call_after_refresh(self._place_close)
         self._load()
         self.query_one("#log-view", RichLog).focus()
+
+    def on_resize(self) -> None:
+        # the [X] rides the log-view's border: recompute after a
+        # terminal resize settles (call_after_refresh for the fresh
+        # region - region lags the size change by a layout pass)
+        self.call_after_refresh(self._place_close)
+
+    def _place_close(self) -> None:
+        """Park the [X] on the log-view's top-right border dashes,
+        flush with one dash before the corner glyph (same chrome as
+        the dialog modals)."""
+        region = self.query_one("#log-view", RichLog).region
+        if not region.width:
+            return
+        self.query_one("#far-close").styles.offset = (
+            region.x + region.width - 5, region.y)
 
     KEYBAR_SCROLL = [
         ("/", "Search", "focus_search"), ("n", "Next", "next_match"),

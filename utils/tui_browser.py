@@ -419,12 +419,19 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self._set_keybar(self.KEYBAR_LIST)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        """Context-sensitive footer: filter vs session pane hotkeys."""
+        """Context-sensitive footer: filter vs session pane hotkeys.
+
+        Only the browser's OWN panes (_PaneList) drive the
+        active-pane tracking - modal widgets live on other screens,
+        and a modal ListView (the log picker's #log-list) used to
+        hijack _active_list_id, leaving hotkeys pointing at a pane
+        that no longer exists until a mouse click reset it."""
         widget = event.widget
-        if isinstance(widget, ListView):
+        if isinstance(widget, _PaneList):
             self._active_list_id = widget.id or "sessions"
             self._set_keybar(self.KEYBAR_LIST)
-        elif isinstance(widget, Input) and widget.id == "filter":
+        elif isinstance(widget, Input) and widget.id == "filter" \
+                and widget.screen is self.screen:
             self._set_keybar(self.KEYBAR_FILTER)
 
     def on_input_changed(self, event: "Input.Changed") -> None:
@@ -950,18 +957,33 @@ class SessionBrowser(KeyBarOwner, App[int]):
             return
         from .tui_actions import LogModal, LogPickerModal
         if len(logs) == 1:
-            self.push_screen(LogModal(logs[0][0]))
+            self.push_screen(LogModal(logs[0][0]),
+                             callback=lambda _: self._refocus_pane())
             return
         self._set_keybar(self.KEYBAR_MENU)
 
         def on_result(path: Optional[Path]) -> None:
             self._set_keybar(self.KEYBAR_LIST)
             if path is not None:
-                self.push_screen(LogModal(path))
+                self.push_screen(LogModal(path),
+                                 callback=lambda _: self._refocus_pane())
 
         self.push_screen(
             LogPickerModal(logs, unquote_display(sel[0])),
             callback=on_result)
+
+    def _refocus_pane(self) -> None:
+        """Return focus to the active pane when a log viewer closes.
+
+        Textual's pop-screen focus restore only tracks the screen
+        DIRECTLY below the dismissed one - when the viewer was pushed
+        from the log picker's dismiss callback, that screen is the
+        already-popped picker, so the browser ends up unfocused and
+        its hotkeys (l, e, p...) go dead until a mouse click."""
+        try:
+            self.query_one(f"#{self._active_list_id}", ListView).focus()
+        except Exception:  # nosec B110 - not mounted yet
+            pass
 
     def _logs_dir(self) -> Path:
         from .logs_util import log_dir
