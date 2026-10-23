@@ -256,6 +256,29 @@ class FARKeyBar(Horizontal):
         self._render_slots()
 
 
+# Shared plumbing for any screen/app that hosts a #keybar FARKeyBar:
+# swapping the entries per context and dispatching clicked slots to the
+# screen's action_* methods. (Textual message handlers resolve by name,
+# so the mixin's methods are found regardless of the base class.)
+class KeyBarOwner:
+    """Mixin: hosts a FARKeyBar with id="keybar".
+
+    _set_keybar(entries) is safe before mount (no-op). Slot clicks run
+    the screen-namespace action mapped on the slot (action_<name>)."""
+
+    def _set_keybar(self, entries: Sequence[Tuple]) -> None:
+        try:
+            self.query_one("#keybar", FARKeyBar).set_entries(entries)
+        except Exception:  # nosec B110 - not mounted yet
+            pass
+
+    async def on_key_bar_clicked(self, event: "KeyBarClicked") -> None:
+        """Clickable FAR key bar: dispatch the slot's mapped action."""
+        act = event.action
+        if act and hasattr(self, f"action_{act}"):
+            await self.run_action(act)
+
+
 # FAR windows/shadow widget classes (styles live in the CSS constants above).
 class FarShadow(Static):
     """Drop shadow block; embed FAR_SHADOW_CSS in the app CSS."""

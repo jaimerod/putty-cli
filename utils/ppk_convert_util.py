@@ -65,7 +65,8 @@ def convert_ppk_to_openssh(ppk_path: str) -> Optional[str]:
         return None
 
 
-def _cache_dir() -> Path:
+def ppk_cache_dir() -> Path:
+    """Converted-key cache dir: $PUTTY_PPK_CACHE_DIR or the default."""
     return Path(os.environ.get(CACHE_ENV)
                 or (Path.home() / ".cache" / "putty-cli" / "keys")).expanduser()
 
@@ -79,7 +80,7 @@ def _cache_key(ppk_file: Path) -> str:
 
 def _cached_key(ppk_file: Path) -> Optional[Path]:
     """Return a cached converted key if one exists for this file version."""
-    candidate = _cache_dir() / _cache_key(ppk_file)
+    candidate = ppk_cache_dir() / _cache_key(ppk_file)
     if candidate.is_file() and candidate.stat().st_size > 0:
         return candidate
     return None
@@ -89,7 +90,7 @@ def _install_to_cache(ppk_file: Path, tmp_key: Path) -> Optional[Path]:
     """Atomically move the converted key into the cache. Returns the
     final path, or None if the cache dir cannot be created/written."""
     try:
-        cache_dir = _cache_dir()
+        cache_dir = ppk_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
         final = cache_dir / _cache_key(ppk_file)
         os.replace(tmp_key, final)

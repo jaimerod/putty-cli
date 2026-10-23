@@ -5,17 +5,9 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .ssh_command_util import safe_name
+from .ssh_command_util import log_dir, safe_name
 
 VIEWER_KEYS = {"n": "-N", "v": "-V"}
-
-
-def log_dir(reg_path: Optional[Path] = None) -> Path:
-    """Where session logs live - SAME resolution as _wrap_tmux:
-    $PUTTY_LOG_DIR > the .reg file's directory > ~/.putty-cli/logs."""
-    return Path(os.environ.get("PUTTY_LOG_DIR")
-                or (reg_path.parent if reg_path is not None
-                    else Path.home() / ".putty-cli" / "logs")).expanduser()
 
 
 def list_logs(directory: Optional[Path] = None, limit: int = 30,

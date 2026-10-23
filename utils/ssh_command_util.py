@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .ppk_convert_util import convert_ppk_to_openssh
+from .session_util import jump_host_of
 
 # Root under which Windows drives appear (WSL). Injectable for tests.
 WSL_MNT_ROOT = Path("/mnt")
@@ -71,75 +72,25 @@ def _resolve_ppk_path(ppk_file_str: str, reg_path: Optional[Path]) -> Optional[P
     return None
 
 
-def build_ssh_command(
-    session_name: str,
-    session: Dict[str, str],
-    reg_path: Optional[Path] = None,
-    tmux: bool = True,
-    quiet: bool = False,
-    convert_keys: bool = True,
-) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Build the tmux command that opens an ssh session.
-
-    Returns (argv, temp_key_path) where argv is a list safe to pass to
-    subprocess.run(shell=False). With tmux=False, argv is the bare ssh
-    command (used for clipboard copy / dry-run display / no-tmux mode).
-
-    quiet=True suppresses status prints (preview mode). With
-    convert_keys=False, PublicKeyFile is shown as a placeholder without
-    running puttygen - no filesystem side effects (TUI preview).
-    Returns (None, None) if the session has no usable HostName.
-    """
-    if "HostName" not in session or not session["HostName"].strip():
-        return None, None
-
-    temp_key: Optional[str] = None
-    proto = session.get("Protocol", "ssh").strip().lower()
-
-    if proto == "mosh":
-        # Mosh session: user@host via mosh; port/key options mostly
-        # handled by mosh-server negotiation, so we pass just identity.
-        parts = ["mosh"]
-        user = session.get("UserName", "").strip()
-        host = session["HostName"].strip()
-        ssh_port = session.get("PortNumber", "22")
-        ssh_opts = []
-        if ssh_port != "22":
-            ssh_opts += ["-p", ssh_port]
-        ppk = session.get("PublicKeyFile", "").strip()
-        if ppk:
-            if convert_keys:
-                converted, temp_key = _convert_session_key(ppk, reg_path, quiet=quiet)
-                if converted:
-                    ssh_opts += ["-i", converted]
-            elif not quiet:
-                print("  → Using key: (cached on connect)")
-        if ssh_opts:
-            parts.append("--ssh=" + shlex.join(["ssh"] + ssh_opts))
-        parts.append(f"{user}@{host}" if user else host)
-        # fall through to the shared tmux/log wrapper below
-    else:
-        parts, temp_key = _build_ssh_argv(
-            session, reg_path, quiet=quiet, convert_keys=convert_keys)
-
-    if not tmux:
-        # Bare argv (clipboard copy, dry-run display, no-tmux mode).
-        # Skip log-dir makedirs side effect.
-        return parts, temp_key
-
-    return _wrap_tmux(parts, session_name, reg_path), temp_key
+def log_dir(reg_path: Optional[Path] = None) -> Path:
+    """Where session logs live (pure path resolution):
+    $PUTTY_LOG_DIR > the .reg file's directory > ~/.putty-cli/logs."""
+    return Path(os.environ.get("PUTTY_LOG_DIR")
+                or (reg_path.parent if reg_path is not None
+                    else Path.home() / ".putty-cli" / "logs")).expanduser()
 
 
-def _build_ssh_argv(
-    session: Dict[str, str], reg_path: Optional[Path],
-    quiet: bool = False, convert_keys: bool = True,
-) -> Tuple[List[str], Optional[str]]:
-    """Build the plain ssh argv for an ssh-protocol session.
+def _plan_ssh(session: Dict[str, str],
+              convert_keys: bool = True,
+              ) -> Tuple[List[str], Optional[str], List[str]]:
+    """PURE ssh-protocol plan: (argv, ppk_file, notes).
 
-    Returns (parts, temp_key). quiet/convert_keys pass through to the
-    key conversion for side-effect-free preview builds."""
-    temp_key: Optional[str] = None
+    The argv carries a '' placeholder where the identity file goes -
+    the caller splices the converted key path in, or drops the
+    ["-i", ""] pair when no key is usable. Notes are warning/status
+    lines for the caller to print. No I/O, no prints, no subprocesses."""
     parts = ["ssh"]
+    notes: List[str] = []
 
     port = session.get("PortNumber", "22")
     if port != "22":
@@ -149,40 +100,34 @@ def _build_ssh_argv(
     # to ssh's ProxyJump (-J): in practice PuTTY setups exported here use
     # ProxyHost/ProxyPort/ProxyUsername of a jump host, which is exactly
     # what -J models. Methods 1-3 (SOCKS4/5, HTTP CONNECT) are not supported
-    # and produce a warning below.
-    proxy_method = session.get("ProxyMethod", "0").strip()
-    proxy_host = session.get("ProxyHost", "").strip()
-    if proxy_method == "6" and proxy_host:
+    # and produce a warning note below.
+    jump = jump_host_of(session)
+    if jump:
         proxy_port = session.get("ProxyPort", "22").strip()
         proxy_user = session.get("ProxyUsername", "").strip()
-        jump = f"{proxy_user}@{proxy_host}" if proxy_user else proxy_host
+        if proxy_user:
+            jump = f"{proxy_user}@{jump}"
         if proxy_port and proxy_port != "22":
             jump = f"{jump}:{proxy_port}"
         parts.extend(["-J", jump])
-    elif proxy_method in {"1", "2", "3"} and proxy_host and not quiet:
-        print(
-            f"  → Warning: proxy type {proxy_method} (SOCKS/HTTP) has no direct "
-            f"ssh equivalent; ignoring proxy for {proxy_host}. "
-            "Consider ProxyMethod 6 (jump host) in PuTTY instead.",
-            file=sys.stderr,
-        )
+    elif session.get("ProxyMethod", "0").strip() in {"1", "2", "3"} \
+            and session.get("ProxyHost", "").strip():
+        notes.append(
+            f"  → Warning: proxy type "
+            f"{session.get('ProxyMethod', '0').strip()} (SOCKS/HTTP) has "
+            "no direct ssh equivalent; ignoring proxy for "
+            f"{session.get('ProxyHost', '').strip()}. "
+            "Consider ProxyMethod 6 (jump host) in PuTTY instead.")
 
     user = session.get("UserName", "").strip()
     host = session["HostName"].strip()
-    if user:
-        parts.append(f"{user}@{host}")
-    else:
-        parts.append(host)
+    parts.append(f"{user}@{host}" if user else host)
 
-    ppk_file_str = session.get("PublicKeyFile", "").strip()
-    if ppk_file_str:
-        if convert_keys:
-            converted, temp_key = _convert_session_key(
-                ppk_file_str, reg_path, quiet=quiet)
-            if converted:
-                parts.extend(["-i", converted])
-        elif not quiet:
-            print("  -> Using key: (converted on connect)")
+    ppk = session.get("PublicKeyFile", "").strip() or None
+    if ppk:
+        parts.extend(["-i", ""])   # identity-file placeholder
+        if not convert_keys:
+            notes.append("  -> Using key: (converted on connect)")
 
     remote_cmd = session.get("RemoteCommand", "").strip()
     if remote_cmd:
@@ -197,10 +142,93 @@ def _build_ssh_argv(
         try:
             parts.extend(shlex.split(extra_args))
         except ValueError as e:
-            print(f"  → Warning: ignoring malformed CommandLineArgs: {e}",
-                  file=sys.stderr)
+            notes.append(
+                f"  → Warning: ignoring malformed CommandLineArgs: {e}")
 
-    return parts, temp_key
+    return parts, ppk, notes
+
+
+def _plan_mosh(session: Dict[str, str], convert_keys: bool = True,
+               ) -> Tuple[List[str], List[str], Optional[str], List[str]]:
+    """PURE mosh-protocol plan: (argv, ssh_opts, ppk_file, notes).
+
+    Mosh negotiates port/key server-side via its ssh bootstrap, so the
+    plan returns the ssh options separately; ssh_opts carry the
+    identity-file placeholder ('') - the caller resolves the key and
+    then joins them into mosh's --ssh= option."""
+    notes: List[str] = []
+    ssh_opts: List[str] = []
+    port = session.get("PortNumber", "22")
+    if port != "22":
+        ssh_opts += ["-p", port]
+    ppk = session.get("PublicKeyFile", "").strip() or None
+    if ppk:
+        ssh_opts += ["-i", ""]   # identity-file placeholder
+        if not convert_keys:
+            notes.append("  → Using key: (cached on connect)")
+    user = session.get("UserName", "").strip()
+    host = session["HostName"].strip()
+    parts = ["mosh", f"{user}@{host}" if user else host]
+    return parts, ssh_opts, ppk, notes
+
+
+def build_ssh_command(
+    session_name: str,
+    session: Dict[str, str],
+    reg_path: Optional[Path] = None,
+    tmux: bool = True,
+    quiet: bool = False,
+    convert_keys: bool = True,
+) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Build the tmux command that opens an ssh session.
+
+    Returns (argv, temp_key_path) where argv is a list safe to pass to
+    subprocess.run(shell=False). With tmux=False, argv is the bare ssh
+    command (used for clipboard copy / dry-run display / no-tmux mode).
+
+    The argv itself comes from the pure planners (_plan_ssh /
+    _plan_mosh); the effects live only here: printing the planners'
+    notes, running puttygen when convert_keys=True (quiet=True
+    suppresses output), and creating the log dir for the tmux wrap.
+    With convert_keys=False, PublicKeyFile is left out of the argv
+    without running puttygen - no filesystem side effects (TUI
+    preview). Returns (None, None) if the session has no usable
+    HostName.
+    """
+    if "HostName" not in session or not session["HostName"].strip():
+        return None, None
+
+    proto = session.get("Protocol", "ssh").strip().lower()
+    temp_key: Optional[str] = None
+    if proto == "mosh":
+        parts, ssh_opts, ppk, notes = _plan_mosh(session, convert_keys)
+    else:
+        parts, ppk, notes = _plan_ssh(session, convert_keys)
+        ssh_opts = None
+    if not quiet:
+        for note in notes:
+            print(note, file=sys.stderr)
+
+    if ppk:
+        holder = ssh_opts if ssh_opts is not None else parts
+        idx = holder.index("")
+        if convert_keys:
+            converted, temp_key = _convert_session_key(
+                ppk, reg_path, quiet=quiet)
+            if converted:
+                holder[idx] = converted   # splice the real key path in
+                idx = -1                  # nothing to drop
+        if idx >= 0:
+            del holder[idx - 1:idx + 1]   # no usable key: drop "-i", ""
+    if ssh_opts:
+        parts.insert(1, "--ssh=" + shlex.join(["ssh"] + ssh_opts))
+
+    if not tmux:
+        # Bare argv (clipboard copy, dry-run display, no-tmux mode).
+        # Skip log-dir makedirs side effect.
+        return parts, temp_key
+
+    return _wrap_tmux(parts, session_name, reg_path), temp_key
 
 
 def _wrap_tmux(
@@ -229,14 +257,9 @@ def _wrap_tmux(
     target parsing is affected.)
     """
     timestamp = time.strftime("%Y-%m-%d_%H%M")
-    log_dir = os.environ.get("PUTTY_LOG_DIR")
-    if not log_dir:
-        if reg_path is not None:
-            log_dir = str(reg_path.parent)
-        else:
-            log_dir = str(Path.home() / ".putty-cli" / "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = f"{log_dir}/{timestamp}-{safe_name(session_name)}.log"
+    d = log_dir(reg_path)
+    os.makedirs(d, exist_ok=True)
+    log_file = f"{d}/{timestamp}-{safe_name(session_name)}.log"
 
     in_tmux = bool(os.environ.get("TMUX"))
     name = safe_name(session_name)

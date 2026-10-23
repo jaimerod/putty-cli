@@ -17,6 +17,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Input, ListItem, ListView, Static
 
 from .display_util import session_tag
+from .far_dialog import FarValueField
 from .far_style import (
     ACTIVE_PALETTE,
     FAR_KEYBAR_CSS,
@@ -25,7 +26,7 @@ from .far_style import (
     FARKeyBar,
     FarShadow,
     FarWindow,
-    KeyBarClicked,
+    KeyBarOwner,
     install_far_theme,
 )
 from .putty_reg_write_util import (
@@ -34,7 +35,12 @@ from .putty_reg_write_util import (
     edit_session_values,
     reg_file_stamp,
 )
-from .recent_sessions_util import format_relative_time, remove_entry, rename_entry
+from .recent_sessions_util import (
+    recent_info_suffix,
+    remove_entry,
+    rename_entry,
+)
+from .session_util import SESSION_FIELDS, jump_host_of, session_value
 from .ssh_command_util import build_ssh_command
 from .titlecase_util import smart_title, unquote_display
 
@@ -107,13 +113,7 @@ def _row(
     # CONNECTION DETAIL pane now; rows stay FAR-panel-terse and single-line
     display = smart_title(unquote_display(name))
     if recent_entries and name in recent_entries:
-        entry = recent_entries[name]
-        ts = entry.get("ts")
-        info = format_relative_time(
-            int(ts) if isinstance(ts, (int, float)) else None)
-        exit_code = entry.get("exit")
-        if isinstance(exit_code, (int, float)) and int(exit_code) != 0:
-            info += (" " if info else "") + "✗"
+        info = recent_info_suffix(recent_entries[name])
         if info:
             display = f"{display}  ({info})"
     return SessionRow(name, display, session_tag(name))
@@ -130,17 +130,15 @@ def detail_values(
         unquote_display(name), session, reg_path=reg_path,
         tmux=False, quiet=True, convert_keys=False,
     )
-    jump = (session.get("ProxyHost", "").strip()
-            if session.get("ProxyMethod", "0").strip() == "6" else "")
     return {
         "command": shlex.join(cmd) if cmd else "(no hostname)",
-        "HostName": session.get("HostName", "").strip() or "-",
-        "UserName": session.get("UserName", "").strip() or "-",
-        "PortNumber": session.get("PortNumber", "22") or "22",
-        "Protocol": session.get("Protocol", "ssh").strip() or "ssh",
-        "PublicKeyFile": session.get("PublicKeyFile", "").strip() or "-",
-        "ProxyHost": jump or "-",
-        "RemoteCommand": session.get("RemoteCommand", "").strip() or "-",
+        "HostName": session_value(session, "HostName", "-"),
+        "UserName": session_value(session, "UserName", "-"),
+        "PortNumber": session_value(session, "PortNumber", "22"),
+        "Protocol": session_value(session, "Protocol", "ssh"),
+        "PublicKeyFile": session_value(session, "PublicKeyFile", "-"),
+        "ProxyHost": jump_host_of(session) or "-",
+        "RemoteCommand": session_value(session, "RemoteCommand", "-"),
     }
 
 
@@ -167,33 +165,17 @@ class _PaneList(ListView):
     BINDINGS = [Binding("tab", "app.next_pane", "Pane", show=False)]
 
 
-DETAIL_FIELDS = (
-    ("Host", "HostName"),
-    ("User", "UserName"),
-    ("Port", "PortNumber"),
-    ("Protocol", "Protocol"),
-    ("Key", "PublicKeyFile"),
-    ("Jump host", "ProxyHost"),
-    ("Remote cmd", "RemoteCommand"),
-)
+# the canonical (label, key) field list shared with the edit dialog
+DETAIL_FIELDS = SESSION_FIELDS
 
 
-class DetailField(Static, can_focus=False):
-    """Read-only far-field: edit-dialog-style form widget for the detail
-    pane. The value is set programmatically as the highlight moves;
-    never focusable or text-editable (this Textual's Input has no
-    read-only mode, so fields are field-styled Statics)."""
+class DetailField(FarValueField):
+    """Read-only far-field for the detail pane: the shared value-field
+    widget with the pane's .detail-field styling (the value is set
+    programmatically as the highlight moves; never focusable)."""
 
     def __init__(self, **kwargs: Any) -> None:
-        super().__init__("", classes="detail-field", markup=False, **kwargs)
-
-    @property
-    def value(self) -> str:
-        return str(self.content)
-
-    @value.setter
-    def value(self, text: str) -> None:
-        self.update(text)
+        super().__init__(classes="detail-field", **kwargs)
 
 
 class DetailPane(Vertical):
@@ -218,7 +200,7 @@ async def app_push_screen(
     app.push_screen(modal, callback=on_result)
 
 
-class SessionBrowser(App[int]):
+class SessionBrowser(KeyBarOwner, App[int]):
     """putty-cli session browser; returns 0 normally, 1 on error."""
 
     CSS = f"""
@@ -373,12 +355,6 @@ class SessionBrowser(App[int]):
         ("y", "Delete", None), ("Esc", "Cancel", None),
     ]
 
-    def _set_keybar(self, entries: List[Tuple]) -> None:
-        try:
-            self.query_one("#keybar", FARKeyBar).set_entries(entries)
-        except Exception:  # nosec B110 - not mounted yet
-            pass
-
     def on_mount(self) -> None:
         install_far_theme(self)
         self.screen.add_class("browser-bg")
@@ -409,14 +385,6 @@ class SessionBrowser(App[int]):
     async def action_blur_filter(self) -> None:
         self.query_one(f"#{self._active_list_id}", ListView).focus()
         self._set_keybar(self.KEYBAR_LIST)
-
-    async def on_key_bar_clicked(
-        self, event: "KeyBarClicked"
-    ) -> None:
-        """Clickable FAR key bar: dispatch the slot's mapped action."""
-        act = event.action
-        if act and hasattr(self, f"action_{act}"):
-            await self.run_action(act)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         """Context-sensitive footer: filter vs session pane hotkeys."""
@@ -601,47 +569,56 @@ class SessionBrowser(App[int]):
             await self._open_delete_modal(name)
         # None = cancelled: nothing to do
 
+    def _open_reg_modal(self, session_name: str, build_modal: Any,
+                        keybar: List[Tuple],
+                        on_confirm: Any) -> None:
+        """Shared rails for modals that edit the .reg file: the session
+        must exist and a .reg must be attached, the staleness stamp is
+        captured, the keybar swaps for the dialog's keys, and the
+        dismiss result is dispatched back on the main loop."""
+        if session_name not in self.usable:
+            return
+        if self.reg_path is None:
+            self._status("no .reg file to edit")
+            return
+        self._edit_stamp = reg_file_stamp(self.reg_path)
+        self._set_keybar(keybar)
+        modal = build_modal()
+
+        def on_result(payload: Optional[Dict[str, Any]]) -> None:
+            self._set_keybar(self.KEYBAR_LIST)
+            self.call_later(on_confirm, payload, session_name)
+
+        self.push_screen(modal, callback=on_result)
+
     async def _open_delete_modal(self, session_name: str) -> None:
         """FAR confirm dialog; the deletion runs through the guarded
         writer once confirmed."""
         from .tui_actions import DeleteConfirmModal
-        session = self.usable.get(session_name)
-        if session is None:
-            return
-        if self.reg_path is None:
-            self.status_message = "no .reg file to edit"
-            self._update_status()
-            return
-        self._edit_stamp = reg_file_stamp(self.reg_path)
-        self._set_keybar(self.KEYBAR_DELETE)
-        modal = DeleteConfirmModal(
-            unquote_display(session_name),
-            host=session.get("HostName", ""))
-
-        def on_result(payload: Optional[Dict[str, Any]]) -> None:
-            self._set_keybar(self.KEYBAR_LIST)
-            self.call_later(self._delete_confirmed, payload, session_name)
-
-        self.push_screen(modal, callback=on_result)
+        self._open_reg_modal(
+            session_name,
+            build_modal=lambda: DeleteConfirmModal(
+                unquote_display(session_name),
+                host=session_value(self.usable[session_name], "HostName")),
+            keybar=self.KEYBAR_DELETE,
+            on_confirm=self._delete_confirmed,
+        )
 
     async def _delete_confirmed(
         self, payload: Optional[Dict[str, Any]], session_name: str,
     ) -> None:
         if not payload or not payload.get("delete"):
-            self.status_message = "delete cancelled"
-            self._update_status()
+            self._status("delete cancelled")
             return
         reg_path = self.reg_path
         if reg_path is None:  # guarded when the dialog opened
-            self.status_message = "no .reg file to edit"
-            self._update_status()
+            self._status("no .reg file to edit")
             return
         try:
             result = delete_session(
                 reg_path, session_name, expect_stamp=self._edit_stamp)
         except RegEditError as e:
-            self.status_message = f"✗ not deleted: {e}"
-            self._update_status()
+            self._status(f"✗ not deleted: {e}")
             return
         self.usable.pop(session_name, None)
         self.recent_names = [n for n in self.recent_names
@@ -654,55 +631,41 @@ class SessionBrowser(App[int]):
         self._rebuild_rows()
         backup = result.backup_path.name if result.backup_path \
             else "no backup"
-        self.status_message = f"deleted ✓ (backup: {backup})"
-        self._update_status()
+        self._status(f"deleted ✓ (backup: {backup})")
 
     async def _open_edit_modal(self, session_name: str) -> None:
         """FAR-style edit dialog over the browser; saves via the surgical
         .reg writer (never regenerating untouched bytes)."""
         from .tui_actions import EditSessionModal
-        session = self.usable.get(session_name)
-        if session is None:
-            return
-        if self.reg_path is None:
-            self.status_message = "no .reg file to edit"
-            self._update_status()
-            return
-        self._edit_stamp = reg_file_stamp(self.reg_path)
-        self._set_keybar(self.KEYBAR_EDIT)
-        modal = EditSessionModal(session_name, session)
-
-        def on_result(changes: Optional[Dict[str, str]]) -> None:
-            self._set_keybar(self.KEYBAR_LIST)
-            self.call_later(self._edit_saved, changes, session_name)
-
-        self.push_screen(modal, callback=on_result)
+        self._open_reg_modal(
+            session_name,
+            build_modal=lambda: EditSessionModal(
+                session_name, self.usable[session_name]),
+            keybar=self.KEYBAR_EDIT,
+            on_confirm=self._edit_saved,
+        )
 
     async def _edit_saved(
         self, payload: Optional[Dict[str, Any]], session_name: str,
     ) -> None:
         if payload is None:
-            self.status_message = "edit cancelled"
-            self._update_status()
+            self._status("edit cancelled")
             return
         rename_to = payload.get("rename_to")
         changes = payload.get("values", {})
         if not changes and not rename_to:
-            self.status_message = "saved (nothing to change)"
-            self._update_status()
+            self._status("saved (nothing to change)")
             return
         reg_path = self.reg_path
         if reg_path is None:  # guarded when the dialog opened
-            self.status_message = "no .reg file to edit"
-            self._update_status()
+            self._status("no .reg file to edit")
             return
         try:
             result = edit_session_values(
                 reg_path, session_name, changes,
                 expect_stamp=self._edit_stamp, rename_to=rename_to)
         except RegEditError as e:
-            self.status_message = f"✗ edit not saved: {e}"
-            self._update_status()
+            self._status(f"✗ edit not saved: {e}")
             return
         new_name = result.name
         self.usable[new_name] = result.session_values
@@ -723,8 +686,7 @@ class SessionBrowser(App[int]):
         if renamed:
             parts.append(f"renamed: {unquote_display(new_name)}")
         parts.append(f"saved ✓ (backup: {backup})")
-        self.status_message = " · ".join(parts)
-        self._update_status()
+        self._status(" · ".join(parts))
 
     def _rebuild_rows(self) -> None:
         self.recent_rows = build_recent_rows(
@@ -780,6 +742,18 @@ class SessionBrowser(App[int]):
             return None
         return row.name, self.usable[row.name]
 
+    def _status(self, message: str) -> None:
+        """Set the status-line message and repaint it."""
+        self.status_message = message
+        self._update_status()
+
+    def _require_selected(self) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """The highlighted session, or None with a status-line hint."""
+        sel = self._selected_session()
+        if sel is None:
+            self._status("no session highlighted")
+        return sel
+
     def _reload_recents(self) -> None:
         """Re-read the recents file and refresh the RECENT pane: the
         connect callback updated the file inside the suspend; without
@@ -795,10 +769,8 @@ class SessionBrowser(App[int]):
             pass
 
     async def action_connect(self) -> None:
-        sel = self._selected_session()
+        sel = self._require_selected()
         if sel is None:
-            self.status_message = "no session highlighted"
-            self._update_status()
             return
         name, _session = sel
         self.selected_name = name
@@ -814,29 +786,24 @@ class SessionBrowser(App[int]):
         # putty.py's callback recorded this connect: show it NOW
         self._reload_recents()
         self._rebuild_rows()
-        self.status_message = f"connected: {unquote_display(name)}"
-        self._update_status()
+        self._status(f"connected: {unquote_display(name)}")
 
     async def action_ping(self) -> None:
         """p / menu Ping: FAR ping dialog (probe worker fills results)."""
-        sel = self._selected_session()
+        sel = self._require_selected()
         if sel is None:
-            self.status_message = "no session highlighted"
-            self._update_status()
             return
         name, session = sel
-        host = session.get("HostName", "").strip()
-        port = session.get("PortNumber", "22")
+        host = session_value(session, "HostName")
+        port = session_value(session, "PortNumber", "22")
         if not host:
-            self.status_message = "no hostname to ping"
-            self._update_status()
+            self._status("no hostname to ping")
             return
         from .tui_actions import PingModal
-        jump = session.get("ProxyHost", "").strip() \
-            if session.get("ProxyMethod", "0").strip() == "6" else ""
         self._set_keybar(self.KEYBAR_PING)
         modal = PingModal(
-            unquote_display(name), host, port, jump_host=jump,
+            unquote_display(name), host, port,
+            jump_host=jump_host_of(session),
             on_complete=self._on_ping_complete(session))
 
         def on_result(_r: object) -> None:
@@ -849,16 +816,15 @@ class SessionBrowser(App[int]):
         the dialog closes)."""
         def complete(ok: bool, msg: str) -> None:
             note = ""
-            if not ok and session.get("ProxyMethod", "0").strip() == "6":
-                jump = session.get("ProxyHost", "").strip()
+            if not ok:
+                jump = jump_host_of(session)
                 if jump:
                     note = f" (direct probe; connects via {jump})"
-            self.status_message = ("✓ " if ok else "✗ ") + msg + note
-            self._update_status()
+            self._status(("✓ " if ok else "✗ ") + msg + note)
         return complete
 
     async def action_copy(self) -> None:
-        sel = self._selected_session()
+        sel = self._require_selected()
         if sel is None:
             return
         name, session = sel
@@ -868,45 +834,37 @@ class SessionBrowser(App[int]):
             tmux=False, quiet=True,
         )
         if not cmd:
-            self.status_message = "nothing to copy"
+            self._status("nothing to copy")
         elif copy_command(shlex.join(cmd)):
-            self.status_message = "copied (OSC52/tmux buffer)"
+            self._status("copied (OSC52/tmux buffer)")
         else:
-            self.status_message = "copy failed"
-        self._update_status()
+            self._status("copy failed")
 
     async def action_delete(self) -> None:
         """d: confirm-then-delete the highlighted session."""
-        sel = self._selected_session()
+        sel = self._require_selected()
         if sel is None:
-            self.status_message = "no session highlighted"
-            self._update_status()
             return
         await self._open_delete_modal(sel[0])
 
     async def action_edit(self) -> None:
         """e: open the edit dialog for the highlighted session."""
-        sel = self._selected_session()
+        sel = self._require_selected()
         if sel is None:
-            self.status_message = "no session highlighted"
-            self._update_status()
             return
         await self._open_edit_modal(sel[0])
 
     async def action_logs(self) -> None:
         """l: newest log for the highlighted session, in the FAR log
         dialog (scroll + live filter)."""
-        sel = self._selected_session()
+        sel = self._require_selected()
         if sel is None:
-            self.status_message = "no session highlighted"
-            self._update_status()
             return
         from .logs_util import list_logs
         logs = list_logs(self._logs_dir(), limit=10,
                          session_name=sel[0])
         if not logs:
-            self.status_message = f"no logs yet for {unquote_display(sel[0])}"
-            self._update_status()
+            self._status(f"no logs yet for {unquote_display(sel[0])}")
             return
         from .tui_actions import LogModal
         self.push_screen(LogModal(logs[0][0]))

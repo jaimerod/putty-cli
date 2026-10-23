@@ -14,14 +14,18 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from utils.clipboard_util import copy_command
 from utils.display_util import generate_menu_items
 from utils.env_util import load_dotenv
+from utils.net_util import run_ping
+from utils.ppk_convert_util import ppk_cache_dir
 from utils.putty_parse_util import parse_putty_reg
 from utils.recent_sessions_util import (
     load_recent_entries,
     load_recent_sessions,
     update_recent_sessions,
 )
+from utils.session_util import session_value
 from utils.ssh_command_util import build_ssh_command
 from utils.titlecase_util import unquote_display
 
@@ -214,9 +218,7 @@ def connect_to_session(
         # Cached keys live in the ppk cache dir and must survive; only
         # delete keys created outside it (cache-miss fallback temp files).
         if temp_key and os.path.exists(temp_key):
-            cache_root = os.environ.get("PUTTY_PPK_CACHE_DIR") or str(
-                Path.home() / ".cache" / "putty-cli" / "keys"
-            )
+            cache_root = str(ppk_cache_dir())
             if not os.path.abspath(temp_key).startswith(os.path.abspath(cache_root)):
                 try:
                     os.unlink(temp_key)
@@ -327,34 +329,10 @@ def pick_action(session_name: str) -> Optional[str]:
     return actions[idx]
 
 
-def copy_to_clipboard(text: str) -> bool:
-    """Copy text via OSC52 (any terminal) or xclip/wl-copy fallback."""
-    import base64
-    encoded = base64.b64encode(text.encode()).decode()
-    try:
-        sys.stdout.write(f"\033]52;c;{encoded}\007")
-        sys.stdout.flush()
-        return True
-    except OSError:
-        return False
-
-
-def ping_probe(host: str, port: str = "22") -> Tuple[bool, str]:
-    """TCP-level reachability probe (works where ICMP ping is blocked).
-
-    Returns (reachable, message) - message is human-readable either way."""
-    import socket
-    host = host.split("@")[-1]
-    try:
-        with socket.create_connection((host, int(port)), timeout=3):
-            return True, f"{host}:{port} reachable"
-    except OSError as e:
-        return False, f"{host}:{port} unreachable ({e})"
-
-
 def ping_host(host: str, port: str = "22") -> int:
-    """CLI wrapper around ping_probe; prints the result."""
-    ok, msg = ping_probe(host, port)
+    """CLI wrapper around the shared reachability probe; prints the
+    result."""
+    ok, msg = run_ping(host, port)
     if ok:
         print(f"  ✓ {msg}")
         return 0
@@ -378,14 +356,14 @@ def handle_action(
             unquote_display(selected_name), session, reg_path=reg_path,
             tmux=False,
         )
-        if cmd and copy_to_clipboard(shlex.join(cmd)):
+        if cmd and copy_command(shlex.join(cmd)):
             print("Copied to clipboard (OSC52).")
             return 0
         print("Could not copy to clipboard.", file=sys.stderr)
         return 1
     if action == ACTION_PING:
-        host = session.get("HostName", "").strip()
-        port = session.get("PortNumber", "22")
+        host = session_value(session, "HostName")
+        port = session_value(session, "PortNumber", "22")
         if not host:
             print("No hostname to ping.", file=sys.stderr)
             return 1

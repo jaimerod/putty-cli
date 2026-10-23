@@ -11,7 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 import putty
-from utils.display_util import generate_menu_items, make_display_pair, separator
+from utils.display_util import (
+    generate_menu_items, make_display_pair, separator, separator_term,
+)
 from utils.ppk_convert_util import convert_ppk_to_openssh
 from utils.putty_parse_util import parse_putty_reg
 from utils.recent_sessions_util import (
@@ -509,7 +511,8 @@ class TestSessionActions:
         assert "unreachable" in capsys.readouterr().err
 
     def test_copy_to_clipboard_osc52(self, capsys):
-        assert putty.copy_to_clipboard("ssh foo") is True
+        # the menu's Copy uses the shared clipboard util
+        assert putty.copy_command("ssh foo") is True
         out = capsys.readouterr().out
         assert "\033]52;c;" in out  # OSC52 escape sequence
 
@@ -523,8 +526,9 @@ class TestSessionActions:
         assert "Copied" in capsys.readouterr().out
 
     def test_handle_action_ping(self, tmp_path):
+        # unified probe: ICMP first (RFC 5737 addr fails both ICMP+TCP)
         rc = putty.handle_action(
-            putty.ACTION_PING, "s", {"HostName": "127.0.0.1", "PortNumber": "1"},
+            putty.ACTION_PING, "s", {"HostName": "192.0.2.1", "PortNumber": "1"},
             reg_path=tmp_path / "putty.reg", recent_file=tmp_path / "rec",
         )
         assert rc == 1
@@ -625,7 +629,8 @@ class TestTagGrouping:
         items = list(generate_menu_items(sessions, []))
         names = [n for _, n in items if n is not None]
         headers = [d for d, n in items if n is None]
-        assert headers == [separator("PROD"), separator("STAGING"), separator("OTHER")]
+        assert headers == [separator_term("PROD"), separator_term("STAGING"),
+                           separator_term("OTHER")]
         assert names == ["prod:web-1", "prod:web-2", "staging:web", "solo"]
 
     def test_flat_mode_no_tag_headers(self):

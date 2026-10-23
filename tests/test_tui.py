@@ -191,7 +191,7 @@ class TestTuiActions:
         """No ping binary -> TCP-port probe, clearly labeled (tcp)."""
         import socket
 
-        import utils.tui_actions as mod
+        import utils.net_util as mod
         monkeypatch.setattr(mod.shutil, "which", lambda name: None)
         srv = socket.socket()
         srv.bind(("127.0.0.1", 0))
@@ -204,7 +204,7 @@ class TestTuiActions:
     def test_run_ping_reports_latency_from_ping_output(self, monkeypatch):
         import subprocess as sp
 
-        import utils.tui_actions as mod
+        import utils.net_util as mod
         monkeypatch.setattr(
             mod.shutil, "which", lambda name: "/usr/bin/ping")
         monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
@@ -216,7 +216,7 @@ class TestTuiActions:
     def test_run_ping_unknown_host(self, monkeypatch):
         import subprocess as sp
 
-        import utils.tui_actions as mod
+        import utils.net_util as mod
         monkeypatch.setattr(
             mod.shutil, "which", lambda name: "/usr/bin/ping")
         monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
@@ -227,7 +227,7 @@ class TestTuiActions:
     def test_run_ping_packet_loss(self, monkeypatch):
         import subprocess as sp
 
-        import utils.tui_actions as mod
+        import utils.net_util as mod
         monkeypatch.setattr(
             mod.shutil, "which", lambda name: "/usr/bin/ping")
         monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
@@ -239,13 +239,14 @@ class TestTuiActions:
     def test_run_ping_unpermitted_caps_falls_back_to_tcp(self, monkeypatch):
         import subprocess as sp
 
-        import utils.tui_actions as mod
+        import utils.net_util as nmod
+        import utils.net_util as mod
         monkeypatch.setattr(
             mod.shutil, "which", lambda name: "/usr/bin/ping")
         monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
             [], 2, stdout="", stderr="ping: Operation not permitted"))
         calls = []
-        monkeypatch.setattr(mod, "_tcp_probe",
+        monkeypatch.setattr(nmod, "_tcp_probe",
                             lambda h, p: calls.append((h, p)) or (True, "tcp-marker"))
         ok, msg = mod.run_ping("127.0.0.1", "2222")
         assert ok and msg == "tcp-marker" and calls == [("127.0.0.1", "2222")]
@@ -1082,7 +1083,8 @@ class TestBrowserApp:
         when the probe lands; Esc closes."""
         import utils.tui_actions as mod
         from utils.far_style import FARKeyBar
-        from utils.tui_actions import PingModal, _PingField
+        from utils.tui_actions import PingModal
+        from utils.far_dialog import FarValueField
         monkeypatch.setattr(mod, "run_ping",
                             lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
@@ -1100,7 +1102,7 @@ class TestBrowserApp:
                 .count("Close") == 2        # ping footer keybar
             for _ in range(3):
                 await pilot.pause()
-            result = modal.query_one("#ping-result", _PingField)
+            result = modal.query_one("#ping-result", FarValueField)
             assert "down" in result.value and "✗" in result.value
             assert "✗" in app.status_message  # mirrored, persists
             await pilot.press("escape")
@@ -1111,7 +1113,8 @@ class TestBrowserApp:
     async def test_ping_jump_host_note_on_failure(self, monkeypatch):
         """A failed direct probe of a jump-hosted session says so."""
         import utils.tui_actions as mod
-        from utils.tui_actions import PingModal, _PingField
+        from utils.tui_actions import PingModal
+        from utils.far_dialog import FarValueField
         monkeypatch.setattr(mod, "run_ping",
                             lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
@@ -1128,7 +1131,7 @@ class TestBrowserApp:
             assert isinstance(modal, PingModal)
             for _ in range(3):
                 await pilot.pause()
-            note = modal.query_one("#ping-note", _PingField).value
+            note = modal.query_one("#ping-note", FarValueField).value
             assert "gate.example.com" in note
             assert "✗" in app.status_message
             assert "gate.example.com" in app.status_message
@@ -1172,7 +1175,7 @@ class TestBrowserApp:
 
     async def test_ping_note_empty_for_success(self, monkeypatch):
         import utils.tui_actions as mod
-        from utils.tui_actions import _PingField
+        from utils.far_dialog import FarValueField
         monkeypatch.setattr(mod, "run_ping",
                             lambda h, p: (True, f"{h}: 8.1 ms"))
         app = SessionBrowser(
@@ -1187,9 +1190,9 @@ class TestBrowserApp:
             for _ in range(3):
                 await pilot.pause()
             assert not app.screen.query_one("#ping-note",
-                                            _PingField).value
+                                            FarValueField).value
             assert "8.1 ms" in app.screen.query_one(
-                "#ping-result", _PingField).value
+                "#ping-result", FarValueField).value
 
     async def test_slash_focuses_filter_enter_connects(self):
         called = []
@@ -1247,8 +1250,8 @@ class TestSessionActionMenu:
             app.post_message(self._click_on_row(app, 0))
             for _ in range(5):
                 await pilot.pause()
-            box = app.screen.query_one("#ctx-menu")
-            shadow = app.screen.query_one("#ctx-shadow")
+            box = app.screen.query_one("#far-box")
+            shadow = app.screen.query_one("#far-shadow")
             b, s = box.region, shadow.region
             assert s.width == b.width and s.height == b.height
             assert (s.x, s.y) == (b.x + 2, b.y + 1)
@@ -1270,7 +1273,7 @@ class TestSessionActionMenu:
             assert menu.styles.background == Color(0, 0, 0, a=0)
             assert base.styles.background == Color.parse(ACTIVE_PALETTE.bg)
             # menu positioned near the click (row 0 -> region near top)
-            menu = app.screen.query_one("#ctx-menu")
+            menu = app.screen.query_one("#far-box")
             assert abs(menu.region.x - app.screen._last_click_x) < 3 \
                 if hasattr(app.screen, "_last_click_x") else True
 
@@ -1352,7 +1355,8 @@ class TestSessionActionMenu:
     async def test_right_click_ping_dispatch(self, monkeypatch):
         """right-click -> down/enter to Ping -> the FAR ping dialog."""
         import utils.tui_actions as mod
-        from utils.tui_actions import PingModal, _PingField
+        from utils.tui_actions import PingModal
+        from utils.far_dialog import FarValueField
         monkeypatch.setattr(mod, "run_ping",
                             lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
@@ -1368,7 +1372,7 @@ class TestSessionActionMenu:
             for _ in range(4):
                 await pilot.pause()
             assert isinstance(app.screen, PingModal)
-            result = app.screen.query_one("#ping-result", _PingField)
+            result = app.screen.query_one("#ping-result", FarValueField)
             assert "✗" in result.value and "down" in result.value
             assert "✗" in app.status_message           # mirrored
 
@@ -1438,7 +1442,7 @@ class TestSessionActionMenu:
             for _ in range(9):
                 await pilot.pause()
             assert isinstance(app.screen, SessionActionMenu)
-            shadow = app.screen.query_one("#ctx-shadow")
+            shadow = app.screen.query_one("#far-shadow")
             text = str(shadow.render())
             assert text.strip()  # non-empty shadow content
             assert "lo" in text or "OTHER" in text  # covered rows echo
@@ -1454,7 +1458,7 @@ class TestSessionActionMenu:
             await app.push_screen(menu)
             for _ in range(5):
                 await pilot.pause()
-            shadow = menu.query_one("#ctx-shadow")
+            shadow = menu.query_one("#far-shadow")
             assert "═" in str(shadow.render())   # echoes covered frames
 
     async def test_menu_shadow_far_styling(self):
@@ -1478,7 +1482,7 @@ class TestSessionActionMenu:
             for _ in range(9):
                 await pilot.pause()
             assert isinstance(app.screen, SessionActionMenu)  # menu open
-            shadow = app.screen.query_one("#ctx-shadow")
+            shadow = app.screen.query_one("#far-shadow")
             assert shadow.styles.background \
                 == Color.parse(ACTIVE_PALETTE.shadow)
             assert shadow.styles.color == Color.parse(ACTIVE_PALETTE.dim)
@@ -1490,13 +1494,13 @@ class TestSessionActionMenu:
     async def test_region_text_uses_composited_raster(self):
         """Echo source = the composited raster: window frames and the
         centered caption are captured exactly as painted."""
-        from utils import tui_actions
+        from utils import far_dialog
 
         app = SessionBrowser(USABLE, [], {}, None)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause()
             rw = app.query_one("#all-win").region
-            text = tui_actions._region_text(
+            text = far_dialog._region_text(
                 app.screen, rw.x, rw.y, rw.width, 2)
             assert "ALL CONNECTIONS" in text[0]     # caption row
             assert "╔" in text[0] and "╗" in text[0]  # frame glyphs
@@ -1506,7 +1510,7 @@ class TestSessionActionMenu:
         the covered text."""
         from textual.widgets import Static
 
-        from utils import tui_actions
+        from utils import far_dialog
 
         class FakeRegion:
             x, y, width, height = 2, 0, 10, 1
@@ -1519,7 +1523,7 @@ class TestSessionActionMenu:
         class FakeScreen:
             children = (leaf,)   # no _compositor attribute
 
-        text = tui_actions._region_text(FakeScreen(), 0, 0, 10, 1)
+        text = far_dialog._region_text(FakeScreen(), 0, 0, 10, 1)
         assert text[0][2:4] == "AB"
 
 
@@ -1683,8 +1687,10 @@ class TestMenuMouseEvents:
             menu = SessionActionMenu("solo", (8, 5))
             await app.push_screen(menu)
             await pilot.pause()
-            title = menu.query_one("#ctx-title")
-            menu.post_message(self._mouse_event(events.MouseMove, title))
+            # the title lives in the box's border row; hovering the box
+            # chrome (not an option row) must not move the highlight
+            box = menu.query_one("#far-box")
+            menu.post_message(self._mouse_event(events.MouseMove, box))
             await pilot.pause()
             await pilot.pause()
             assert menu._index == 0  # unchanged: title is not an option
@@ -2010,7 +2016,7 @@ class TestEditModal:
             await pilot.pause()
             modal = app.screen
             modal.query_one("#edit-HostName", Input).value = "via-enter"
-            btn = next(w for w in modal.query(".edit-btn")
+            btn = next(w for w in modal.query(".far-btn")
                        if "Save" in str(w.render()))
             btn.focus()
             await pilot.pause()
@@ -2030,7 +2036,7 @@ class TestEditModal:
             await pilot.pause()
             modal = app.screen
             modal.query_one("#edit-HostName", Input).value = "via-click"
-            btn = next(w for w in modal.query(".edit-btn")
+            btn = next(w for w in modal.query(".far-btn")
                        if "Save" in str(w.render()))
             await pilot.click(btn)
             for _ in range(3):
@@ -2047,7 +2053,7 @@ class TestEditModal:
             await pilot.pause()
             modal = app.screen
             modal.query_one("#edit-HostName", Input).value = "nope"
-            btn = next(w for w in modal.query(".edit-btn")
+            btn = next(w for w in modal.query(".far-btn")
                        if "Cancel" in str(w.render()))
             await pilot.click(btn)
             for _ in range(3):

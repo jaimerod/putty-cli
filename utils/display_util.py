@@ -1,20 +1,29 @@
 from collections.abc import Iterator
 from typing import Any, Dict, Optional, Tuple
 
-from .recent_sessions_util import format_relative_time
+from .recent_sessions_util import recent_info_suffix
+from .session_util import jump_host_of
 from .titlecase_util import smart_title, unquote_display
 
 
-def separator(text: str = "", width: Optional[int] = None) -> str:
-    """A '── text ────...' header line sized to the terminal (min 80,
-    from shutil.get_terminal_size when width is None). Total line length
-    is exactly `width` when text fits."""
-    if width is None:
-        import shutil
-        width = max(80, shutil.get_terminal_size((80, 24)).columns)
+def separator(text: str = "", width: int = 80) -> str:
+    """A '── text ────...' header line `width` columns wide (pure).
+    Total line length is exactly `width` when text fits; callers that
+    size to the live terminal use separator_term()."""
     prefix = f"── {text}" if text else ""
     dashes = max(0, width - len(prefix))
     return f"{prefix}{'─' * dashes}" if text else "─" * width
+
+
+def terminal_width() -> int:
+    """The terminal's column count, at least 80 (impure: queries tty)."""
+    import shutil
+    return max(80, shutil.get_terminal_size((80, 24)).columns)
+
+
+def separator_term(text: str = "") -> str:
+    """separator() sized to the live terminal (impure wrapper)."""
+    return separator(text, terminal_width())
 
 
 def make_display_pair(name: str, session: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -24,9 +33,7 @@ def make_display_pair(name: str, session: Dict[str, Any]) -> Tuple[str, str, str
     keyhint = (
         " 🔑" if "PublicKeyFile" in session
         and session["PublicKeyFile"].strip() else "")
-    proxyhint = (
-        " 🔀" if session.get("ProxyMethod", "0").strip() == "6"
-        and session.get("ProxyHost", "").strip() else "")
+    proxyhint = " 🔀" if jump_host_of(session) else ""
     cmdhint = " ⚡" if session.get("RemoteCommand", "").strip() else ""
     target = f"{user}@" if user else ""
     target += host
@@ -69,26 +76,20 @@ def generate_menu_items(
         is the session name, or None for non-selectable items like headers.
     """
     # Header and items for recent sessions
+    width = terminal_width()
     if recent_names:
-        yield separator("RECENT SESSIONS"), None
+        yield separator("RECENT SESSIONS", width), None
         for name in recent_names:
             if name in sessions:
                 _, display, session_name = make_display_pair(name, sessions[name])
                 if recent_entries and name in recent_entries:
-                    entry = recent_entries[name]
-                    ts = entry.get("ts")
-                    info = format_relative_time(
-                        int(ts) if isinstance(ts, (int, float)) else None
-                    )
-                    exit_code = entry.get("exit")
-                    if isinstance(exit_code, (int, float)) and int(exit_code) != 0:
-                        info += (" " if info else "") + "✗"
+                    info = recent_info_suffix(recent_entries[name])
                     if info:
                         display = f"{display}  ({info})"
                 yield display, session_name
         # Separator if there are other sessions to show
         if len(sessions) > len(recent_names):
-            yield separator(), None
+            yield separator("", width), None
 
     remaining = [n for n in sorted(
         sessions.keys(), key=lambda n: smart_title(unquote_display(n)).lower()
@@ -111,12 +112,12 @@ def generate_menu_items(
             ungrouped.append(name)
 
     for tag in sorted(grouped):
-        yield separator(tag.upper()), None
+        yield separator(tag.upper(), width), None
         for name in grouped[tag]:
             _, display, session_name = make_display_pair(name, sessions[name])
             yield display, session_name
     if grouped and ungrouped:
-        yield separator("OTHER"), None
+        yield separator("OTHER", width), None
     for name in ungrouped:
         _, display, session_name = make_display_pair(name, sessions[name])
         yield display, session_name
