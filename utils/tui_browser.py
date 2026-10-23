@@ -210,10 +210,11 @@ class SessionBrowser(KeyBarOwner, App[int]):
     ListView > ListItem.--highlight {{ background: $primary;
         color: {ACTIVE_PALETTE.highlight_fg}; }}
     #filter {{ dock: top; background: $background; color: $foreground;
-             border: solid {ACTIVE_PALETTE.frame}; margin: 0 1 1 1; }}
+             border: solid {ACTIVE_PALETTE.frame}; margin: 1 1 1 1; }}
     #title-bar {{ dock: top; height: 1; color: $secondary;
                  background: $background; padding: 0 1; }}
-    #list-col {{ width: 2fr; }}
+    /* windows inset 1 from the screen edges and from each other */
+    #list-col {{ width: 2fr; padding: 0 1; }}
     #recent-win {{ height: 40%; }}
     #all-win {{ height: 1fr; }}
     #preview-col {{
@@ -222,7 +223,6 @@ class SessionBrowser(KeyBarOwner, App[int]):
         color: $foreground;
         background: $background;
     }}
-    #preview {{ padding: 0 1; }}
     .detail-label {{ width: 13; height: 1; color: $foreground; }}
     .detail-row {{ height: 1; width: 100%; layout: horizontal; }}
     .detail-field {{
@@ -235,7 +235,11 @@ class SessionBrowser(KeyBarOwner, App[int]):
     #detail-command {{ height: 3; overflow: hidden; }}
     .detail-gap {{ height: 1; }}
     Static#status {{ dock: bottom; height: 1; color: $primary;
-                    background: $background; padding: 0 1; }}
+                    background: $background; padding: 0 1;
+                    /* Textual 8 docks every bottom-docked widget on
+                       the LAST row (no stacking): move up one - the
+                       keybar's top margin reserves the space */
+                    offset: 0 -1; }}
     FARKeyBar {{ dock: bottom; }}
     FARKeyBar#ctx-keybar {{ dock: bottom; }}
     """ + FAR_SHADOW_CSS + FAR_WINDOW_CSS + FAR_KEYBAR_CSS
@@ -292,7 +296,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            " PuTTY Sessions  ▒  Enter connect · Tab panes · right-click "
+            "PuTTY Sessions  ▒  Enter connect · Tab panes · right-click "
             "menu · / filter",
             id="title-bar", markup=False,
         )

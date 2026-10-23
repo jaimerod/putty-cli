@@ -232,7 +232,10 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         width: auto;
         height: auto;
         max-height: 90%;
-        padding: 0;
+        /* uniform content inset: 1 unit from the border on both
+           sides, matching the FarWindow panes (their inner widgets
+           carry no padding of their own) */
+        padding: 0 1;
         layer: window;
         layout: vertical;
         /* parked OFF-SCREEN until _place() sets the real offset: the
@@ -255,14 +258,14 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         width: 13;
         color: {ACTIVE_PALETTE.popup_text};
         background: {ACTIVE_PALETTE.popup_bg};
-        padding: 0 0 0 2;
+        padding: 0;
         height: 1;
     }}
     .far-title {{
         color: {ACTIVE_PALETTE.popup_text};
         background: {ACTIVE_PALETTE.popup_bg};
         text-style: bold;
-        padding: 0 2;
+        padding: 0;
         height: 1;
         width: 100%;
         text-overflow: ellipsis;
@@ -270,21 +273,21 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
     .far-text {{
         color: {ACTIVE_PALETTE.popup_text};
         background: {ACTIVE_PALETTE.popup_bg};
-        padding: 0 2;
+        padding: 0;
         width: 100%;
         height: auto;
     }}
     .far-text-dim {{
         color: {ACTIVE_PALETTE.dim};
         background: {ACTIVE_PALETTE.popup_bg};
-        padding: 0 2;
+        padding: 0;
         width: 100%;
         height: auto;
     }}
     .far-error {{
         color: {ACTIVE_PALETTE.error};
         background: {ACTIVE_PALETTE.popup_bg};
-        padding: 0 2;
+        padding: 0;
         width: 100%;
         height: 1;
     }}

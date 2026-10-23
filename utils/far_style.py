@@ -78,7 +78,8 @@ FarWindow {{
 
 # FAR-style window frame: frame-colored border on the panel color.
 # Window captions (border_title) sit inline in the top border row,
-# centered - the FAR.exe dialog-title look.
+# centered - the FAR.exe dialog-title look. Content is inset 1 from
+# the border on both sides (uniform padding across panes/modals).
 def far_window_css(p: Palette) -> str:
     return f"""
 FarWindow {{
@@ -86,6 +87,7 @@ FarWindow {{
     background: {p.bg};
     width: 1fr;
     height: 1fr;
+    padding: 0 1;
     border-title-align: center;
     border-title-color: {p.title};
 }}
@@ -104,6 +106,11 @@ FARKeyBar {{
     width: 100%;
     layout: horizontal;
     background: {p.bg};
+    /* Textual 8 docks every bottom-docked widget on the LAST row (no
+       stacking); the top margin lifts the keybar into place AND
+       reserves the row above for the status line (offset up by its
+       own rule) */
+    margin: 1 0 0 0;
 }}
 
 .keybar-slot {{

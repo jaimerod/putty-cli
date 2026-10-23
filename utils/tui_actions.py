@@ -62,11 +62,12 @@ class SessionActionMenu(FarDialogScreen[Optional[str]]):
         max-height: 16;
     }}
 
-    /* options: popup colors, full-row width */
+    /* options: popup colors, full-row width; the box padding provides
+       the 1-unit inset (uniform with the panes and other modals) */
     .ctx-option {{
         background: {ACTIVE_PALETTE.popup_bg};
         color: {ACTIVE_PALETTE.popup_text};
-        padding: 0 2;
+        padding: 0;
         height: 1;
         width: 1fr;
         text-align: center;
@@ -455,7 +456,7 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
         dock: top;
         color: {ACTIVE_PALETTE.title};
         background: {ACTIVE_PALETTE.bg};
-        padding: 0 2;
+        padding: 0 1;
         height: 1;
         text-style: bold;
     }}
@@ -465,12 +466,18 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
         color: {ACTIVE_PALETTE.popup_text};
         border: none;
         height: 1;
-        padding: 0 2;
+        padding: 0 1;
+        /* Textual 8 docks every top-docked widget at y=0 (no stacking):
+           a 1-row top margin pushes the search below the title AND
+           reserves the space in the flow area */
+        margin: 1 0 0 0;
     }}
     #log-view {{
         border: round {ACTIVE_PALETTE.frame};
         background: {ACTIVE_PALETTE.bg};
-        margin: 1 1 1 2;
+        margin: 1 1;
+        /* content inset 1 from the border, like every pane/window */
+        padding: 0 1;
         height: 1fr;
         scrollbar-size-vertical: 2;
         scrollbar-color: {ACTIVE_PALETTE.highlight_bg};
@@ -481,7 +488,11 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
         height: 1;
         background: {ACTIVE_PALETTE.bg};
         color: {ACTIVE_PALETTE.highlight_bg};
-        padding: 0 2;
+        padding: 0 1;
+        /* same non-stacking dock quirk: bottom-docked widgets share
+           the last row - move up one; the keybar's top margin
+           reserves the space */
+        offset: 0 -1;
     }}
     RichLog {{
         background: {ACTIVE_PALETTE.bg};
@@ -491,7 +502,7 @@ class LogModal(KeyBarOwner, ModalScreen[None]):
     """
 
     def compose(self) -> ComposeResult:
-        yield Static(f" {self.log_path.name}", id="log-title",
+        yield Static(self.log_path.name, id="log-title",
                      markup=False)
         yield Input(
             placeholder="/ search this log (n next match, N previous)",
