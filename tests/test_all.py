@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 
 import putty
+from utils import menu_flow
 from utils.display_util import (
     generate_menu_items, make_display_pair, separator, separator_term,
 )
@@ -511,8 +512,9 @@ class TestSessionActions:
         assert "unreachable" in capsys.readouterr().err
 
     def test_copy_to_clipboard_osc52(self, capsys):
-        # the menu's Copy uses the shared clipboard util
-        assert putty.copy_command("ssh foo") is True
+        # both the menu and the TUI Copy use the shared clipboard util
+        from utils.clipboard_util import copy_command
+        assert copy_command("ssh foo") is True
         out = capsys.readouterr().out
         assert "\033]52;c;" in out  # OSC52 escape sequence
 
@@ -536,7 +538,8 @@ class TestSessionActions:
     def test_handle_action_connect_invokes_connect(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         called = {}
-        monkeypatch.setattr(putty, "connect_to_session",
+        # handle_action resolves connect_to_session in menu_flow
+        monkeypatch.setattr(menu_flow, "connect_to_session",
                             lambda *a, **k: called.update(k) or 0)
         rc = putty.handle_action(
             putty.ACTION_CONNECT, "s", {"HostName": "h"},
@@ -1290,7 +1293,8 @@ class TestRecentsMetadata:
 
 class TestInteractiveFlows:
     def _fake_menu(self, monkeypatch, pick_sequence):
-        """Replace putty.TerminalMenu with a scripted picker."""
+        """Replace menu_flow.TerminalMenu with a scripted picker (the
+        pickers live in utils.menu_flow since the entry-point split)."""
         seq = iter(pick_sequence)
 
         class FakeMenu:
@@ -1303,7 +1307,7 @@ class TestInteractiveFlows:
                 except StopIteration:
                     return None
 
-        monkeypatch.setattr(putty, "TerminalMenu", FakeMenu)
+        monkeypatch.setattr(menu_flow, "TerminalMenu", FakeMenu)
 
     def test_menu_cancel_exits_zero(self, monkeypatch, tmp_path):
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
@@ -1359,7 +1363,8 @@ class TestInteractiveFlows:
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         calls = []
-        monkeypatch.setattr(putty, "ping_host", lambda h, p="22": calls.append((h, p)) or 0)
+        monkeypatch.setattr(menu_flow, "ping_host",
+                            lambda h, p="22": calls.append((h, p)) or 0)
         # pick prod-db, action=Ping (index 2)
         self._fake_menu(monkeypatch, [3, 2])
         with contextlib.redirect_stdout(io.StringIO()):
@@ -1381,10 +1386,10 @@ class TestInteractiveFlows:
 
     def test_import_error_message(self, monkeypatch, capsys):
         """simple-term-menu missing -> friendly venv instructions."""
-        # putty raises SystemExit(1) at import time with guidance; simulate
-        # by importing a fresh module alias with the dependency blocked.
+        # the TerminalMenu guard lives in utils.menu_flow (putty.py's
+        # interactive flow module); reload it with the dependency blocked
         import builtins
-        import importlib.util
+        import importlib
         real_import = builtins.__import__
 
         def fake_import(name, *a, **k):
@@ -1392,12 +1397,9 @@ class TestInteractiveFlows:
                 raise ImportError(name)
             return real_import(name, *a, **k)
 
-        spec = importlib.util.spec_from_file_location(
-            "putty_fresh", Path(__file__).resolve().parent.parent / "putty.py")
-        module = importlib.util.module_from_spec(spec)
         monkeypatch.setattr(builtins, "__import__", fake_import)
         with pytest.raises(SystemExit) as exc:
-            spec.loader.exec_module(module)  # type: ignore[union-attr]
+            importlib.reload(menu_flow)
         assert exc.value.code == 1
         assert "simple-term-menu not installed" in capsys.readouterr().err
 
@@ -1701,8 +1703,8 @@ class TestRegReload:
                 return "first"  # choose ACTION_BACK path
             return None  # cancel on second pass
 
-        monkeypatch.setattr(putty, "pick_session_interactive", pick_and_mutate)
-        monkeypatch.setattr(putty, "pick_action", lambda *a, **k: putty.ACTION_BACK)
+        monkeypatch.setattr(menu_flow, "pick_session_interactive", pick_and_mutate)
+        monkeypatch.setattr(menu_flow, "pick_action", lambda *a, **k: putty.ACTION_BACK)
 
         err = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), \

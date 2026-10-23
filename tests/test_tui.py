@@ -554,7 +554,9 @@ class TestTuiFallback:
         monkeypatch.setattr(builtins, "__import__", fake_import)
         monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setattr(putty, "pick_session_interactive",
+        # the menu loop resolves its pickers in utils.menu_flow
+        import utils.menu_flow as menu_flow
+        monkeypatch.setattr(menu_flow, "pick_session_interactive",
                             lambda *a, **k: None)  # cancel at menu
         err = io.StringIO()
         out = io.StringIO()

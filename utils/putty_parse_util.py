@@ -1,12 +1,22 @@
 import re
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, Tuple
 
 SESSION_HEADER_RE = re.compile(
     r'^\[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\(.+?)\]$',
     re.IGNORECASE,
 )
 VALUE_RE = re.compile(r'^"([^"]+)"=(.+)$')
+
+
+def file_stamp(path: Path) -> Optional[Tuple[int, int]]:
+    """(size, mtime_ns) of a file, or None if unreadable - the cheap
+    staleness stamp for the menu's reload-on-change loop (pure)."""
+    try:
+        st = path.stat()
+        return (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
 
 
 def _read_reg_text(file_path: Path) -> str:
