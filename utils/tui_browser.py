@@ -211,13 +211,15 @@ class SessionBrowser(KeyBarOwner, App[int]):
         color: {ACTIVE_PALETTE.highlight_fg}; }}
     #filter {{ dock: top; background: $background; color: $foreground;
              border: solid {ACTIVE_PALETTE.frame}; margin: 0 1; }}
-    /* windows inset 1 from the screen edges and from each other */
-    #list-col {{ width: 2fr; padding: 0 1; }}
-    #recent-win {{ height: 40%; }}
+    /* windows keep a 1-unit margin from the screen edges but sit
+       flush against each other in the middle */
+    #list-col {{ width: 2fr; padding: 0 0 0 1; }}
+    /* 5 entry rows + the double border (recents hold max 5) */
+    #recent-win {{ height: 7; }}
     #all-win {{ height: 1fr; }}
     #preview-col {{
         width: 1fr;
-        padding: 0 1;
+        padding: 0 1 0 0;
         color: $foreground;
         background: $background;
     }}
