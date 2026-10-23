@@ -67,10 +67,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="do not add the session to recent sessions",
     )
     parser.add_argument(
-        "--archived", action="store_true",
-        help="also show archived sessions (names starting with 'xxx')",
-    )
-    parser.add_argument(
         "--flat", action="store_true",
         help="do not group 'tag:name' sessions under tag headers",
     )
@@ -126,7 +122,6 @@ def run_tui_browser(
     no_record: bool = False,
     no_tmux: bool = False,
     dry_run: bool = False,
-    include_archived: bool = False,
 ) -> Optional[int]:
     """Run the Textual browser. Returns the process exit code, or None
     when textual isn't installed (caller falls back to the menu)."""
@@ -151,7 +146,6 @@ def run_tui_browser(
         usable, recent_sessions, recent_entries, reg_path,
         group_by_tag=group_by_tag, connect_callback=connect,
         recent_file=None if no_record else recent_file,
-        include_archived=include_archived,
     )
     app.run()
     return 0
@@ -176,7 +170,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Error: cannot read .reg file {reg_path}: {e}", file=sys.stderr)
         return 1
 
-    usable = usable_sessions(sessions, include_archived=args.archived)
+    usable = usable_sessions(sessions)
 
     # Non-interactive modes
     if args.list:
@@ -219,7 +213,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             usable, recent_sessions, recent_entries, reg_path,
             group_by_tag=not args.flat,
             no_record=args.no_record, no_tmux=args.no_tmux,
-            dry_run=args.dry_run, include_archived=args.archived,
+            dry_run=args.dry_run,
         )
         if tui_rc is not None:
             return tui_rc
@@ -227,7 +221,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     return run_menu_flow(
         usable, recent_file, reg_path,
-        include_archived=args.archived,
         group_by_tag=not args.flat,
         use_fzf=args.fzf,
         no_record=args.no_record,

@@ -275,7 +275,6 @@ def run_menu_flow(
     recent_file: Path,
     reg_path: Path,
     *,
-    include_archived: bool = False,
     group_by_tag: bool = True,
     use_fzf: bool = False,
     no_record: bool = False,
@@ -301,8 +300,7 @@ def run_menu_flow(
         if reg_stamp is not None and current_stamp != reg_stamp:
             try:
                 reloaded = parse_putty_reg_cached(reg_path)
-                usable = usable_sessions(reloaded,
-                                        include_archived=include_archived)
+                usable = usable_sessions(reloaded)
                 recent_sessions = load_recent_sessions(recent_file, usable)
                 recent_entries = load_recent_entries(recent_file)
                 reg_stamp = current_stamp

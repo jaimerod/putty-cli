@@ -53,7 +53,6 @@ putty-cli --connect NAME --dry-run     print the tmux/ssh argv and exit
 putty-cli --logs               browse session logs in $PAGER
 putty-cli --logs --logs-dir D  browse logs in a specific dir
 putty-cli --fzf                pick with fzf (live ssh-command preview; falls back to menu)
-putty-cli --archived           include archived sessions (names starting with xxx)
 putty-cli --flat               no tag grouping
 putty-cli --no-tmux            run ssh directly (no logging)
 putty-cli --no-record          don't touch the recents file
@@ -122,7 +121,6 @@ role (frames, captions, menus, inputs, key bar, shadows) is one field.
 ## Session name conventions
 
 - `tag:name` → grouped under a `TAG` header in the menu
-- `xxx*` → archived, hidden unless `--archived`
 
 ## How connection works
 

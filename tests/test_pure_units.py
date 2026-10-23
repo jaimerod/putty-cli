@@ -287,21 +287,16 @@ class TestUsableSessions:
         }
         assert list(usable_sessions(sessions)) == ["ok"]
 
-    def test_archived_hidden_by_default(self):
+    def test_xxx_named_sessions_are_just_sessions(self):
+        """PuTTY parity: nothing is hidden by its name anymore (the
+        old 'xxx = archived' convention is gone)."""
         sessions = {
             "xxx-old": {"HostName": "h"},
             "XXX-upper": {"HostName": "h"},
             "live": {"HostName": "h"},
         }
-        assert list(usable_sessions(sessions)) == ["live"]
-
-    def test_archived_included_on_flag(self):
-        sessions = {
-            "xxx-old": {"HostName": "h"},
-            "live": {"HostName": "h"},
-        }
-        assert list(usable_sessions(sessions, include_archived=True)) \
-            == ["xxx-old", "live"]
+        assert list(usable_sessions(sessions)) \
+            == ["xxx-old", "XXX-upper", "live"]
 
 
 class TestSessionFieldDefs:

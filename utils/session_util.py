@@ -48,13 +48,12 @@ def jump_host_of(session: Dict[str, Any]) -> str:
     return ""
 
 
-def usable_sessions(sessions: Dict[str, Dict[str, Any]],
-                    include_archived: bool = False) -> SessionMap:
-    """Filter sessions to those with a HostName; by default hides
-    archived sessions (name starts with 'xxx'). Pure."""
+def usable_sessions(sessions: Dict[str, Dict[str, Any]]) -> SessionMap:
+    """Filter sessions to those with a connectable HostName (PuTTY
+    shows non-connectable bookkeeping sessions like 'Default Settings'
+    too - those have no HostName and cannot be launched). Pure."""
     return {
         k: v
         for k, v in sessions.items()
         if "HostName" in v and v["HostName"].strip()
-        and (include_archived or not k.lower().startswith("xxx"))
     }

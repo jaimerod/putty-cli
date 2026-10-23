@@ -275,7 +275,6 @@ class SessionBrowser(KeyBarOwner, App[int]):
         group_by_tag: bool = True,
         connect_callback: Any = None,
         recent_file: Optional[Path] = None,
-        include_archived: bool = False,
     ):
         super().__init__()
         self.usable = usable
@@ -285,7 +284,6 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self.group_by_tag = group_by_tag
         self.connect_callback = connect_callback  # runs after suspend()
         self.recent_file = recent_file            # renamed on rename
-        self.include_archived = include_archived  # reload keeps the flag
         self.selected_name: Optional[str] = None
         self._last_cursor: tuple[int, int] = (0, 0)
         # two panes: #recents (top) and #sessions = the ALL pane (bottom)
@@ -394,8 +392,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self._reg_stamp = stamp
         try:
             reloaded = usable_sessions(
-                parse_putty_reg_cached(self.reg_path),
-                include_archived=self.include_archived)
+                parse_putty_reg_cached(self.reg_path))
         except Exception:  # noqa: BLE001 - keep the last good snapshot
             self._status("✗ .reg changed but could not be re-read")
             return

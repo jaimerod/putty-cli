@@ -429,7 +429,10 @@ class TestCli:
         rc = self._run("--list")
         assert rc == 0
 
-    def test_list_excludes_archived(self, capsys):
+    def test_list_shows_xxx_named_sessions(self, capsys):
+        """PuTTY parity: what PuTTY shows, we show - the old 'xxx =
+        archived, hide it' convention is gone (Default Settings, which
+        has no HostName, is still hidden: nothing to connect to)."""
         import os
         old = os.environ.get("PUTTY_REG_PATH")
         os.environ["PUTTY_REG_PATH"] = "tests/data/sample.reg"
@@ -437,7 +440,7 @@ class TestCli:
             putty.main(["--list"])
         if old is not None:
             os.environ["PUTTY_REG_PATH"] = old
-        assert "xxx-archived" not in buf.getvalue()
+        assert "xxx-archived" in buf.getvalue()
         assert "prod-web-1" in buf.getvalue()
 
     def test_connect_dry_run(self):
@@ -479,17 +482,6 @@ class TestCli:
             putty.build_parser().parse_args(["--help"])
         assert exc.value.code == 0
         assert "--connect" in capsys.readouterr().out
-
-    def test_archived_sessions_hidden_from_menu(self, capsys):
-        import os
-        old = os.environ.get("PUTTY_REG_PATH")
-        os.environ["PUTTY_REG_PATH"] = "tests/data/sample.reg"
-        with contextlib.redirect_stdout(io.StringIO()) as buf:
-            putty.main(["--list"])
-        if old is not None:
-            os.environ["PUTTY_REG_PATH"] = old
-        assert "xxx-archived" not in buf.getvalue()
-
 
 # ── Session actions (item 1) ─────────────────────────────────────────────────
 
@@ -653,13 +645,11 @@ class TestTagGrouping:
         headers = [d for d, _ in items if _ is None]
         assert not any("PROD" in d for d in headers[1:])
 
-    def test_archived_toggle(self, capsys, monkeypatch):
-        import io
-        monkeypatch.setenv("PUTTY_REG_PATH", "tests/data/sample.reg")
-        with contextlib.redirect_stdout(io.StringIO()) as buf:
-            rc = putty.main(["--list", "--archived"])
-        assert rc == 0
-        assert "xxx-archived" in buf.getvalue()
+    def test_archived_flag_removed(self, capsys):
+        """The --archived toggle is gone along with the convention."""
+        with pytest.raises(SystemExit) as exc:
+            putty.build_parser().parse_args(["--list", "--archived"])
+        assert exc.value.code == 2  # argparse: unrecognized argument
     def test_wrapper_script_is_executable_and_targets_repo(self):
         """bin/putty-cli: executable, resolves repo dir from its own path."""
         wrapper = Path(__file__).resolve().parent.parent / "bin" / "putty-cli"
@@ -1473,15 +1463,21 @@ class TestInteractiveFlows:
         assert rc == 1
         assert "no session named" in capsys.readouterr().err.lower()
 
-    def test_all_archived_reg_error(self, monkeypatch, tmp_path, capsys):
+    def test_xxx_named_session_is_connectable(self, monkeypatch, tmp_path):
+        """A reg whose only session starts with 'xxx' is still usable
+        - the archived convention no longer hides anything."""
+        import contextlib
+        import io
         reg = tmp_path / "reg.reg"
         reg.write_text(
             '[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\xxx-archived]\n'
             '"HostName"="h"\n', encoding="utf-8")
         monkeypatch.setenv("PUTTY_REG_PATH", str(reg))
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        rc = putty.main(["--connect", "x"])
-        assert rc == 1
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            rc = putty.main(["--connect", "xxx-archived", "--dry-run"])
+        assert rc == 0
+        assert "ssh h" in buf.getvalue()
 
     def test_format_relative_time(self, monkeypatch):
         import time as t
