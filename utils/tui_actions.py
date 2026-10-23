@@ -9,7 +9,7 @@ from textual import events, on
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Input, RichLog, Rule, Static
+from textual.widgets import Input, ListItem, ListView, RichLog, Rule, Static
 
 from .clipboard_util import copy_command
 from .far_dialog import (
@@ -23,7 +23,8 @@ from .titlecase_util import unquote_display
 
 __all__ = [
     "SessionActionMenu", "EditSessionModal", "PingModal",
-    "DeleteConfirmModal", "LogModal", "run_ping", "copy_command",
+    "DeleteConfirmModal", "LogPickerModal", "LogModal", "run_ping",
+    "copy_command",
 ]
 
 
@@ -206,6 +207,10 @@ class EditSessionModal(FarDialogScreen):
     "rename_to": name-or-None} - only changed fields - or None when
     cancelled.
 
+    With create=True the dialog starts blank (title "New Connection")
+    and dismisses {"create": True, "name": ..., "values": {all
+    fields}} for the .reg writer's create_session.
+
     The Save path refuses quotes/multi-line values (they do not
     round-trip .reg value lines); everything else is guarded in
     utils/putty_reg_write_util.py.
@@ -223,11 +228,16 @@ class EditSessionModal(FarDialogScreen):
         ("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, session_name: str,
-                 session: Dict[str, Any], **kwargs) -> None:
+    def __init__(self, session_name: Optional[str],
+                 session: Dict[str, Any], create: bool = False,
+                 **kwargs) -> None:
         super().__init__(**kwargs)
         self.session_name = session_name
-        self.TITLE = unquote_display(session_name)
+        self._create = create
+        if create:
+            self.TITLE = "New Connection"
+        else:
+            self.TITLE = unquote_display(session_name or "")
         self._session = dict(session)
         self._original = {
             key: session_value(session, key, SESSION_DEFAULTS[key])
@@ -243,7 +253,8 @@ class EditSessionModal(FarDialogScreen):
         # section key in the .reg (URL-quoted by the writer)
         with Horizontal(classes="far-row"):
             yield Static("Name", classes="far-label", markup=False)
-            yield Input(value=unquote_display(self.session_name),
+            yield Input(value=unquote_display(self.session_name)
+                        if self.session_name else "",
                         id="edit-Name")
         for label, key in self.FIELD_DEFS:
             with Horizontal(classes="far-row"):
@@ -297,9 +308,6 @@ class EditSessionModal(FarDialogScreen):
             raise ValueError("Name: line breaks are not storable")
         if not name:
             raise ValueError("Name must not be empty")
-        rename_to = None
-        if name != unquote_display(self.session_name):
-            rename_to = name
 
         # defaults: PuTTY semantics (empty port = 22, protocol = ssh)
         port = values["PortNumber"] or "22"
@@ -317,13 +325,23 @@ class EditSessionModal(FarDialogScreen):
             if "\r" in val or "\n" in val:
                 raise ValueError(f"{key}: multi-line values are not stored")
 
+        # jump host field drives ProxyMethod 6 (putty-cli convention)
+        jump = values["ProxyHost"].strip()
+        if self._create:
+            # a new session stores ALL fields (no diff), plus the
+            # proxy-method toggle the writer needs
+            values["ProxyMethod"] = "6" if jump else "0"
+            return {"create": True, "name": name,
+                    "values": dict(values)}
+
+        rename_to = None
+        if name != unquote_display(self.session_name):
+            rename_to = name
         # only fields that actually differ become .reg lines
         changes = {
             key: value for key, value in values.items()
             if value != self._original.get(key, "")
         }
-        # jump host field drives ProxyMethod 6 (putty-cli convention)
-        jump = values["ProxyHost"].strip()
         if jump and self._orig_method != "6":
             changes["ProxyMethod"] = "6"
         elif not jump and self._orig_method == "6":
@@ -337,14 +355,67 @@ class EditSessionModal(FarDialogScreen):
         self.dismiss(payload)
 
 
+class LogPickerModal(FarDialogScreen[Optional[Path]]):
+    """FAR file-panel list of one session's logs (newest first).
+
+    Enter or a click opens the highlighted log, Esc cancels. Dismiss
+    value: the chosen log's Path, or None when cancelled."""
+
+    box_width = 60
+    FOCUS_TARGET = "#log-list"
+    BUTTONS = []
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = f"""
+    #log-list {{
+        height: auto;
+        max-height: 12;
+        background: {ACTIVE_PALETTE.popup_bg};
+        color: {ACTIVE_PALETTE.popup_text};
+    }}
+    #log-list > ListItem.--highlight {{
+        background: {ACTIVE_PALETTE.selected_bg};
+        color: {ACTIVE_PALETTE.selected_fg};
+        text-style: bold;
+    }}
+    """
+
+    def __init__(self, entries: List[Tuple[Path, int, float]],
+                 session_display: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.entries = list(entries)
+        self.TITLE = f"logs: {session_display}"
+
+    def compose_body(self):
+        from .logs_util import format_log_line
+        yield ListView(id="log-list", *[
+            ListItem(Static(format_log_line(*entry), markup=False))
+            for entry in self.entries
+        ])
+
+    def on_list_view_selected(self, event: "ListView.Selected") -> None:
+        try:
+            index = list(self.query(ListItem)).index(event.item)
+        except ValueError:  # pragma: no cover - structural invariant
+            return
+        self.dismiss(self.entries[index][0])
+
+    async def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class PingModal(FarDialogScreen):
     """FAR dialog probing the highlighted session's host.
 
     Opens instantly ('checking…'), runs the real probe in a worker
     thread (ICMP ping with latency, TCP fallback), then fills the
     Result/Note fields and mirrors the outcome into the browser's
-    status line. Esc/q closes. A jump-hosted session's failed direct
-    probe says so (it cannot see through the tunnel).
+    status line. Esc/q closes. A jump-hosted session is probed THROUGH
+    the jump host (probe_factory runs the real ssh argv) - only the
+    direct-probe fallback carries the 'connects via' note.
     """
 
     box_width = 46
@@ -360,7 +431,7 @@ class PingModal(FarDialogScreen):
 
     def __init__(self, session_display: str, host: str, port: str,
                  jump_host: str = "", on_complete: Any = None,
-                 **kwargs) -> None:
+                 probe_factory: Any = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._session = session_display
         self.TITLE = session_display
@@ -368,6 +439,9 @@ class PingModal(FarDialogScreen):
         self._port = port or "22"
         self._jump_host = jump_host.strip()
         self._on_complete = on_complete or (lambda *a: None)
+        # zero-arg callable returning (ok, msg); run in the worker
+        # thread, so building the ssh command (puttygen!) is fine there
+        self._probe_factory = probe_factory
 
     def compose_body(self):
         with Horizontal(classes="far-row"):
@@ -384,14 +458,18 @@ class PingModal(FarDialogScreen):
             yield FarValueField(value="", id="ping-note")
 
     async def _probe(self) -> None:
-        # run_ping is sync (subprocess + socket): keep the UI live by
-        # offloading to a thread
-        ok, msg = await asyncio.to_thread(
-            run_ping, self._host, self._port)
+        # the probe is sync (subprocess + socket): keep the UI live by
+        # offloading to a thread; probe_factory (jump-hosted sessions)
+        # builds + runs the real ssh path there
+        probe = self._probe_factory or \
+            (lambda: run_ping(self._host, self._port))
+        ok, msg = await asyncio.to_thread(probe)
+        if not self.is_running:
+            return  # dialog dismissed mid-probe: widgets are gone
         self.query_one("#ping-result", FarValueField).value = \
             ("\u2713 " if ok else "\u2717 ") + msg
         note = ""
-        if not ok and self._jump_host:
+        if not ok and self._jump_host and not self._probe_factory:
             note = (f"direct probe; connects via "
                     f"{self._jump_host}")
         self.query_one("#ping-note", FarValueField).value = note

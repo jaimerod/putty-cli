@@ -299,9 +299,9 @@ class TestTuiActions:
         assert "\033]52;c;" in capsys.readouterr().out
 
     async def test_l_opens_newest_session_log_directly(self, tmp_path, monkeypatch):
-        """l = newest log for the highlighted session, straight into the
-        searchable viewer (skips the chooser)."""
-        from utils.tui_actions import LogModal
+        """l with ONE log goes straight into the searchable viewer
+        (skips the chooser); with several, the FAR picker opens first."""
+        from utils.tui_actions import LogModal, LogPickerModal
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         logs_dir = tmp_path / "logs"
         logs_dir.mkdir()
@@ -318,8 +318,24 @@ class TestTuiActions:
             await pilot.pause()
             await pilot.press("l")
             await pilot.pause()
+            # two solo logs: the picker opens, newest first
+            assert isinstance(app.screen, LogPickerModal)
+            await pilot.press("enter")   # pick the highlighted (newest)
+            for _ in range(3):
+                await pilot.pause()
             assert isinstance(app.screen, LogModal)
             assert app.screen.log_path.name == "2026-10-07_1700-solo.log"
+
+        # ... but a single log skips the picker entirely
+        (logs_dir / "2026-10-07_1700-solo.log").unlink()
+        app2 = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app2.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("l")
+            for _ in range(2):
+                await pilot.pause()
+            assert isinstance(app2.screen, LogModal)
+            assert app2.screen.log_path.name == "2026-10-06_1700-solo.log"
 
     async def test_l_no_logs_shows_status(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "empty-logs"))
@@ -1129,12 +1145,14 @@ class TestBrowserApp:
                 .count("Find") == 1         # browser footer restored
 
     async def test_ping_jump_host_note_on_failure(self, monkeypatch):
-        """A failed direct probe of a jump-hosted session says so."""
-        import utils.tui_actions as mod
+        """A jump-hosted session is probed THROUGH the jump (the real
+        ssh path); a failed probe carries the jump host in the message."""
+        import utils.net_util as nmod
         from utils.tui_actions import PingModal
         from utils.far_dialog import FarValueField
-        monkeypatch.setattr(mod, "run_ping",
-                            lambda h, p: (False, f"{h}: down"))
+        monkeypatch.setattr(nmod, "run_jump_probe",
+                            lambda argv, jump: (
+                                False, f"192.0.2.9: unreachable via {jump}"))
         app = SessionBrowser(
             {"viasolo": {"HostName": "192.0.2.9", "PortNumber": "22",
                          "ProxyMethod": "6", "ProxyHost": "gate.example.com"}},
@@ -1147,10 +1165,11 @@ class TestBrowserApp:
             await pilot.pause()
             modal = app.screen
             assert isinstance(modal, PingModal)
+            assert modal._probe_factory is not None  # through-jump probe
             for _ in range(3):
                 await pilot.pause()
-            note = modal.query_one("#ping-note", FarValueField).value
-            assert "gate.example.com" in note
+            result = modal.query_one("#ping-result", FarValueField).value
+            assert "gate.example.com" in result
             assert "✗" in app.status_message
             assert "gate.example.com" in app.status_message
 
@@ -1192,10 +1211,10 @@ class TestBrowserApp:
             assert len(app.screen_stack) == 2
 
     async def test_ping_note_empty_for_success(self, monkeypatch):
-        import utils.tui_actions as mod
+        import utils.net_util as nmod
         from utils.far_dialog import FarValueField
-        monkeypatch.setattr(mod, "run_ping",
-                            lambda h, p: (True, f"{h}: 8.1 ms"))
+        monkeypatch.setattr(nmod, "run_jump_probe",
+                            lambda argv, jump: (True, f"reachable via {jump}"))
         app = SessionBrowser(
             {"viasolo": {"HostName": "h", "ProxyMethod": "6",
                          "ProxyHost": "gate.example.com"}}, [], {}, None)
@@ -1209,7 +1228,7 @@ class TestBrowserApp:
                 await pilot.pause()
             assert not app.screen.query_one("#ping-note",
                                             FarValueField).value
-            assert "8.1 ms" in app.screen.query_one(
+            assert "reachable via gate.example.com" in app.screen.query_one(
                 "#ping-result", FarValueField).value
 
     async def test_slash_focuses_filter_enter_connects(self):
@@ -2446,3 +2465,134 @@ class TestDeleteFlow:
             assert "delete cancelled" in app.status_message
             from utils.tui_actions import DeleteConfirmModal
             assert not isinstance(app.screen, DeleteConfirmModal)
+
+
+class TestTuiRegReload:
+    """The browser polls the .reg for external changes (a Windows-side
+    re-export while the TUI is open)."""
+
+    def _reg(self, tmp_path, *sessions):
+        lines = ["Windows Registry Editor Version 5.00", ""]
+        for name, host in sessions:
+            lines.append(
+                "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY"
+                f"\\Sessions\\{name}]")
+            lines.append(f'"HostName"="{host}"')
+            lines.append("")
+        reg = tmp_path / "putty.reg"
+        reg.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
+        return reg
+
+    async def test_external_change_reloads(self, tmp_path):
+        reg = self._reg(tmp_path, ("alpha", "a.example.com"))
+        app = SessionBrowser({"alpha": {"HostName": "a.example.com"}},
+                             [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            # Windows-side re-export adds a session while we're open
+            self._reg(tmp_path, ("alpha", "a.example.com"),
+                      ("beta", "b.example.com"))
+            app._check_reg_changed()
+            await pilot.pause()
+            assert "beta" in app.usable
+            assert any(r.name == "beta" for r in app.rows)
+            assert "↻" in app.status_message
+
+    async def test_unreadable_change_keeps_snapshot(self, tmp_path, monkeypatch):
+        import utils.tui_browser as browser_mod
+        reg = self._reg(tmp_path, ("alpha", "a.example.com"))
+        app = SessionBrowser({"alpha": {"HostName": "a.example.com"}},
+                             [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            self._reg(tmp_path, ("alpha", "a.example.com"),
+                      ("beta", "b.example.com"))  # stamp changes...
+            def boom(_path):
+                raise PermissionError("read failed")
+            monkeypatch.setattr(browser_mod, "parse_putty_reg", boom)
+            app._check_reg_changed()
+            await pilot.pause()
+            assert "alpha" in app.usable      # last good snapshot kept
+            assert "✗" in app.status_message
+
+    async def test_own_edit_stays_silent(self, tmp_path):
+        """Our own .reg writes update the poll stamp: no phantom reload."""
+        from utils.putty_parse_util import file_stamp
+        from utils.putty_reg_write_util import reg_file_stamp
+        reg = self._reg(tmp_path, ("alpha", "a.example.com"))
+        app = SessionBrowser({"alpha": {"HostName": "a.example.com"}},
+                             [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            app._edit_stamp = reg_file_stamp(reg)
+            await app._edit_saved(
+                {"values": {"UserName": "ops"}, "rename_to": None}, "alpha")
+            await pilot.pause()
+            assert app._reg_stamp == file_stamp(reg)
+            app._check_reg_changed()
+            await pilot.pause()
+            assert "↻" not in app.status_message
+            assert "saved ✓" in app.status_message
+
+
+class TestCreateFlow:
+    """n: create a new connection in the .reg export."""
+
+    def _reg(self, tmp_path):
+        text = (
+            "Windows Registry Editor Version 5.00\r\n\r\n"
+            "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\Sessions\\alpha]\r\n"
+            '"HostName"="a.example.com"\r\n')
+        reg = tmp_path / "putty.reg"
+        reg.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+        return reg
+
+    async def test_n_creates_new_session(self, tmp_path):
+        reg = self._reg(tmp_path)
+        app = SessionBrowser({"alpha": {"HostName": "a.example.com"}},
+                             [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.action_new()
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            assert modal.TITLE == "New Connection"
+            modal.query_one("#edit-Name", Input).value = "brand-new"
+            modal.query_one("#edit-HostName", Input).value = \
+                "new.example.com"
+            await modal.action_save()
+            for _ in range(4):
+                await pilot.pause()
+            assert "brand-new" in app.usable
+            assert any(r.name == "brand-new" for r in app.rows)
+            assert "created ✓" in app.status_message
+            text = reg.read_bytes().decode("utf-16")
+            assert "new.example.com" in text
+
+    async def test_create_cancelled_leaves_file_alone(self, tmp_path):
+        reg = self._reg(tmp_path)
+        before = reg.read_bytes()
+        app = SessionBrowser({"alpha": {"HostName": "a.example.com"}},
+                             [], {}, reg)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.action_new()
+            for _ in range(3):
+                await pilot.pause()
+            await app.screen.action_cancel()
+            for _ in range(2):
+                await pilot.pause()
+            assert "create cancelled" in app.status_message
+            assert reg.read_bytes() == before
+
+    async def test_no_reg_file_refuses(self, tmp_path):
+        app = SessionBrowser({"alpha": {"HostName": "a.example.com"}},
+                             [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.action_new()
+            await pilot.pause()
+            assert "no .reg file to edit" in app.status_message
+            from utils.tui_actions import EditSessionModal
+            assert not isinstance(app.screen, EditSessionModal)

@@ -14,6 +14,7 @@ from textual import events
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Input, ListItem, ListView, Static
 
 from .display_util import session_tag
@@ -29,6 +30,7 @@ from .far_style import (
     KeyBarOwner,
     install_far_theme,
 )
+from .putty_parse_util import file_stamp, parse_putty_reg
 from .putty_reg_write_util import (
     RegEditError,
     delete_session,
@@ -40,7 +42,12 @@ from .recent_sessions_util import (
     remove_entry,
     rename_entry,
 )
-from .session_util import SESSION_FIELDS, jump_host_of, session_value
+from .session_util import (
+    SESSION_FIELDS,
+    jump_host_of,
+    session_value,
+    usable_sessions,
+)
 from .ssh_command_util import build_ssh_command
 from .titlecase_util import smart_title, unquote_display
 
@@ -54,10 +61,9 @@ except ImportError:
 class SessionRow:
     """A selectable row in the session list."""
 
-    def __init__(self, name: str, display: str, tag: Optional[str]):
+    def __init__(self, name: str, display: str):
         self.name = name
         self.display = display
-        self.tag = tag
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"SessionRow({self.name!r})"
@@ -97,10 +103,10 @@ def build_all_rows(
     rows: List[SessionRow] = []
     for tag in sorted(grouped):
         rows.append(SessionRow(f"__hdr__:{tag}",
-                               f"── {tag.upper()} " + "─" * 20, None))
+                               f"── {tag.upper()} " + "─" * 20))
         rows.extend(_row(n, usable[n], None) for n in grouped[tag])
     if grouped and ungrouped:
-        rows.append(SessionRow("__hdr__:__other__", "── OTHER " + "─" * 20, None))
+        rows.append(SessionRow("__hdr__:__other__", "── OTHER " + "─" * 20))
     rows.extend(_row(n, usable[n], None) for n in ungrouped)
     return rows
 
@@ -116,7 +122,7 @@ def _row(
         info = recent_info_suffix(recent_entries[name])
         if info:
             display = f"{display}  ({info})"
-    return SessionRow(name, display, session_tag(name))
+    return SessionRow(name, display)
 
 
 def detail_values(
@@ -249,9 +255,10 @@ class SessionBrowser(KeyBarOwner, App[int]):
         Binding("slash", "focus_filter", "Find"),
         # priority: must pre-empt the focused ListView's own Enter
         # (select_cursor), else a second 'Selected' fires and double-fires
-        # (check_action disables it while the action menu / log viewer is
-        # on top, so their own Enter keys still work)
+        # (check_action disables it while a modal is on top, so the
+        # modal's own Enter keys still work)
         Binding("enter", "connect", "Connect", priority=True),
+        Binding("n", "new", "New Connection"),
         Binding("p", "ping", "Ping"),
         Binding("l", "logs", "View Session Log"),
         Binding("e", "edit", "Edit"),
@@ -268,6 +275,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
         group_by_tag: bool = True,
         connect_callback: Any = None,
         recent_file: Optional[Path] = None,
+        include_archived: bool = False,
     ):
         super().__init__()
         self.usable = usable
@@ -277,6 +285,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self.group_by_tag = group_by_tag
         self.connect_callback = connect_callback  # runs after suspend()
         self.recent_file = recent_file            # renamed on rename
+        self.include_archived = include_archived  # reload keeps the flag
         self.selected_name: Optional[str] = None
         self._last_cursor: tuple[int, int] = (0, 0)
         # two panes: #recents (top) and #sessions = the ALL pane (bottom)
@@ -287,12 +296,9 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self._active_list_id = "sessions"
         self.status_message = ""
         self._edit_stamp: Optional[str] = None
-
-    KEYBAR = [
-        ("F1", "help"), ("F3", "view log"), ("F4", "edit"),
-        ("F5", "copy cmd"), ("F6", "ping"), ("F7", "filter"),
-        ("F10", "quit"),
-    ]
+        # cheap (size, mtime) stamp for the external-change poller; our
+        # own .reg writes update it so they never look external
+        self._reg_stamp: Optional[tuple] = None
 
     def compose(self) -> ComposeResult:
         yield Input(placeholder="/filter…", id="filter")
@@ -324,13 +330,14 @@ class SessionBrowser(KeyBarOwner, App[int]):
         yield Static("", id="status")
         yield FARKeyBar(
             [("Enter", "Connect"), ("/", "Find"), ("Tab", "Pane"),
-             ("e", "Edit"), ("d", "Delete"), ("p", "Ping"), ("l", "Log"),
-             ("q", "Quit")],
+             ("n", "New"), ("e", "Edit"), ("d", "Delete"), ("p", "Ping"),
+             ("l", "Log"), ("q", "Quit")],
             id="keybar",
         )
 
     KEYBAR_LIST = [
         ("Enter", "Connect", "connect"),
+        ("n", "New", "new"),
         ("/", "Find", "focus_filter"), ("Tab", "Pane", "next_pane"),
         ("e", "Edit", "edit"), ("d", "Delete", "delete"),
         ("p", "Ping", "ping"), ("l", "Log", "logs"), ("q", "Quit", "quit"),
@@ -362,11 +369,40 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self.rows = build_all_rows(self.usable, self.group_by_tag)
         self._refresh_list()
         self._suspendable = True  # probed at action time (headless pilots)
+        # poll for external .reg changes (the no-TUI menu re-stats per
+        # pick; the TUI has no pick loop, so poll on a timer instead)
+        self._reg_stamp = file_stamp(self.reg_path) \
+            if self.reg_path is not None else None
+        if self.reg_path is not None:
+            self.set_interval(2.0, self._check_reg_changed)
         # FAR opens on the active panel: recent connections if there are
         # any, else the all-connections pane
         self.query_one(
             "#recents" if self.recent_rows else "#sessions", ListView
         ).focus()
+
+    def _check_reg_changed(self) -> None:
+        """Reload the session list when the .reg changed on disk (a
+        Windows re-export while the browser is open). A failed re-read
+        keeps the last good snapshot; our own writes update the stamp in
+        _edit_saved/_delete_confirmed/_created so they stay silent."""
+        if self.reg_path is None or self._reg_stamp is None:
+            return
+        stamp = file_stamp(self.reg_path)
+        if stamp == self._reg_stamp:
+            return
+        self._reg_stamp = stamp
+        try:
+            reloaded = usable_sessions(
+                parse_putty_reg(self.reg_path),
+                include_archived=self.include_archived)
+        except Exception:  # noqa: BLE001 - keep the last good snapshot
+            self._status("✗ .reg changed but could not be re-read")
+            return
+        self.usable = reloaded
+        self._reload_recents()
+        self._rebuild_rows()
+        self._status(f"↻ .reg changed - {len(reloaded)} sessions")
 
     async def action_focus_filter(self) -> None:
         self.query_one("#filter", Input).focus()
@@ -627,6 +663,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self.selected_name = None
         if self.recent_file is not None:
             remove_entry(self.recent_file, session_name)
+        self._reg_stamp = file_stamp(reg_path)  # ours: not an external change
         self._rebuild_rows()
         backup = result.backup_path.name if result.backup_path \
             else "no backup"
@@ -678,6 +715,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
                 for k, v in self.recent_entries.items()}
             if self.recent_file is not None:
                 rename_entry(self.recent_file, session_name, new_name)
+        self._reg_stamp = file_stamp(reg_path)  # ours: not an external change
         self._rebuild_rows()
         backup = result.backup_path.name if result.backup_path \
             else "no backup"
@@ -715,20 +753,12 @@ class SessionBrowser(KeyBarOwner, App[int]):
             field.value = values[key]
 
     def check_action(self, action: str, parameters: tuple) -> bool:
-        """Disable bindings while a modal/log screen is active so the
-        modal's own widgets and keys keep working (also keeps Enter/e/p
-        from opening dialogs underneath or behind an open screen)."""
-        if action in ("connect", "edit", "ping", "delete"):
-            from .tui_actions import (
-                DeleteConfirmModal,
-                EditSessionModal,
-                LogModal,
-                PingModal,
-                SessionActionMenu,
-            )
-            return type(self.screen) not in (
-                SessionActionMenu, LogModal, EditSessionModal,
-                PingModal, DeleteConfirmModal)
+        """Disable bindings while ANY modal screen is active so the
+        modal's own widgets and keys keep working (also keeps
+        Enter/e/n/p from opening dialogs underneath an open screen).
+        isinstance, not a class list: new modals are covered for free."""
+        if action in ("connect", "edit", "new", "ping", "delete"):
+            return not isinstance(self.screen, ModalScreen)
         return True
 
     async def action_quit(self) -> None:
@@ -788,7 +818,9 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self._status(f"connected: {unquote_display(name)}")
 
     async def action_ping(self) -> None:
-        """p / menu Ping: FAR ping dialog (probe worker fills results)."""
+        """p / menu Ping: FAR ping dialog (probe worker fills results).
+        Jump-hosted sessions probe THROUGH the jump (the real ssh
+        path, BatchMode so a password prompt can't hang it)."""
         sel = self._require_selected()
         if sel is None:
             return
@@ -799,27 +831,34 @@ class SessionBrowser(KeyBarOwner, App[int]):
             self._status("no hostname to ping")
             return
         from .tui_actions import PingModal
+        jump = jump_host_of(session)
+        probe_factory = None
+        if jump:
+            def _jump_probe():  # runs in the dialog's worker thread
+                from .net_util import run_jump_probe, run_ping
+                cmd, _ = build_ssh_command(
+                    unquote_display(name), session, reg_path=self.reg_path,
+                    tmux=False, quiet=True)
+                if not cmd:
+                    return run_ping(host, port)
+                return run_jump_probe(cmd, jump)
+            probe_factory = _jump_probe
         self._set_keybar(self.KEYBAR_PING)
         modal = PingModal(
-            unquote_display(name), host, port,
-            jump_host=jump_host_of(session),
-            on_complete=self._on_ping_complete(session))
+            unquote_display(name), host, port, jump_host=jump,
+            probe_factory=probe_factory,
+            on_complete=self._on_ping_complete())
 
         def on_result(_r: object) -> None:
             self._set_keybar(self.KEYBAR_LIST)
 
         self.push_screen(modal, callback=on_result)
 
-    def _on_ping_complete(self, session: Dict[str, Any]) -> Any:
+    def _on_ping_complete(self) -> Any:
         """Mirror the probe result into the status line (persists after
         the dialog closes)."""
         def complete(ok: bool, msg: str) -> None:
-            note = ""
-            if not ok:
-                jump = jump_host_of(session)
-                if jump:
-                    note = f" (direct probe; connects via {jump})"
-            self._status(("✓ " if ok else "✗ ") + msg + note)
+            self._status(("✓ " if ok else "✗ ") + msg)
         return complete
 
     async def action_copy(self) -> None:
@@ -846,6 +885,48 @@ class SessionBrowser(KeyBarOwner, App[int]):
             return
         await self._open_delete_modal(sel[0])
 
+    async def action_new(self) -> None:
+        """n: create a new connection (blank FAR edit dialog; the
+        surgical writer appends the section on save)."""
+        if self.reg_path is None:
+            self._status("no .reg file to edit")
+            return
+        from .tui_actions import EditSessionModal
+        self._edit_stamp = reg_file_stamp(self.reg_path)
+        self._set_keybar(self.KEYBAR_EDIT)
+        modal = EditSessionModal(None, {}, create=True)
+
+        def on_result(payload: Optional[Dict[str, Any]]) -> None:
+            self._set_keybar(self.KEYBAR_LIST)
+            self.call_later(self._created, payload)
+
+        self.push_screen(modal, callback=on_result)
+
+    async def _created(self, payload: Optional[Dict[str, Any]]) -> None:
+        """Save the New Connection dialog: append the section to .reg."""
+        if payload is None:
+            self._status("create cancelled")
+            return
+        reg_path = self.reg_path
+        if reg_path is None:  # guarded when the dialog opened
+            self._status("no .reg file to edit")
+            return
+        from .putty_reg_write_util import create_session
+        try:
+            result = create_session(
+                reg_path, payload["name"], payload["values"],
+                expect_stamp=self._edit_stamp)
+        except RegEditError as e:
+            self._status(f"✗ not created: {e}")
+            return
+        self.usable[result.name] = result.session_values
+        self._reg_stamp = file_stamp(reg_path)  # ours: not external
+        self._rebuild_rows()
+        backup = result.backup_path.name if result.backup_path \
+            else "no backup"
+        self._status(f"created ✓ {unquote_display(result.name)} "
+                     f"(backup: {backup})")
+
     async def action_edit(self) -> None:
         """e: open the edit dialog for the highlighted session."""
         sel = self._require_selected()
@@ -854,8 +935,8 @@ class SessionBrowser(KeyBarOwner, App[int]):
         await self._open_edit_modal(sel[0])
 
     async def action_logs(self) -> None:
-        """l: newest log for the highlighted session, in the FAR log
-        dialog (scroll + live filter)."""
+        """l: the highlighted session's logs; with several, a FAR
+        picker opens first, then the chosen one in the log dialog."""
         sel = self._require_selected()
         if sel is None:
             return
@@ -865,8 +946,20 @@ class SessionBrowser(KeyBarOwner, App[int]):
         if not logs:
             self._status(f"no logs yet for {unquote_display(sel[0])}")
             return
-        from .tui_actions import LogModal
-        self.push_screen(LogModal(logs[0][0]))
+        from .tui_actions import LogModal, LogPickerModal
+        if len(logs) == 1:
+            self.push_screen(LogModal(logs[0][0]))
+            return
+        self._set_keybar(self.KEYBAR_MENU)
+
+        def on_result(path: Optional[Path]) -> None:
+            self._set_keybar(self.KEYBAR_LIST)
+            if path is not None:
+                self.push_screen(LogModal(path))
+
+        self.push_screen(
+            LogPickerModal(logs, unquote_display(sel[0])),
+            callback=on_result)
 
     def _logs_dir(self) -> Path:
         from .logs_util import log_dir

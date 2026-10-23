@@ -279,15 +279,6 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         padding: 0;
         height: 1;
     }}
-    .far-title {{
-        color: {ACTIVE_PALETTE.popup_text};
-        background: {ACTIVE_PALETTE.popup_bg};
-        text-style: bold;
-        padding: 0;
-        height: 1;
-        width: 100%;
-        text-overflow: ellipsis;
-    }}
     .far-text {{
         color: {ACTIVE_PALETTE.popup_text};
         background: {ACTIVE_PALETTE.popup_bg};
