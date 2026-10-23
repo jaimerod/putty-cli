@@ -1,5 +1,6 @@
 import os
 import shlex
+import subprocess  # nosec
 import sys
 import time
 from pathlib import Path
@@ -231,6 +232,28 @@ def build_ssh_command(
     return _wrap_tmux(parts, session_name, reg_path), temp_key
 
 
+def _unique_tmux_name(name: str) -> str:
+    """Disambiguate a tmux session name against live sessions:
+    safe_name() flattens 'Foo Bar' and 'Foo/Bar' to the same 'Foo_Bar',
+    and new-session refuses a duplicate name. Appends -2, -3, ... until
+    the name is free. '-t =name' is the EXACT-match form - a plain -t
+    target parses dots as window/pane separators (see the note in
+    _wrap_tmux's docstring). Best-effort: if tmux can't be queried the
+    name is returned unchanged (the launch will surface the error)."""
+    candidate = name
+    for i in range(1, 21):
+        try:
+            result = subprocess.run(  # nosec B603, B607: fixed argv
+                ["tmux", "has-session", "-t", f"={candidate}"],
+                capture_output=True)
+        except OSError:
+            return candidate
+        if result.returncode != 0:    # no such session: name is free
+            return candidate
+        candidate = f"{name}-{i + 1}"
+    return candidate
+
+
 def _wrap_tmux(
     parts: List[str], session_name: str, reg_path: Optional[Path],
 ) -> List[str]:
@@ -268,7 +291,13 @@ def _wrap_tmux(
         argv += ["new-window", "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";"]
     else:
-        argv += ["new-session", "-s", name, "-n", name,
+        # new-session REFUSES a duplicate -s name (two sessions that
+        # flatten to the same safe_name would collide), so -s gets a
+        # live-session-unique name. -n and the log filename keep the
+        # raw safe_name: window names are auto-uniquified by tmux, and
+        # the log file must keep matching previously written logs.
+        session_name_arg = _unique_tmux_name(name)
+        argv += ["new-session", "-s", session_name_arg, "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";",
                  "set-option", "destroy-unattached", "on", ";"]
     argv += ["pipe-pane", "-o", f"cat >> {shlex.quote(log_file)}"]

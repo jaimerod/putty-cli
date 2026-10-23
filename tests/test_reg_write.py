@@ -17,6 +17,7 @@ from utils.putty_parse_util import parse_putty_reg
 from utils.putty_reg_write_util import (
     MAX_BACKUPS,
     RegEditError,
+    create_session,
     delete_session,
     edit_session_values,
     reg_file_stamp,
@@ -462,6 +463,128 @@ class TestDeleting:
         assert result.backup_path is not None
         bak = parse_putty_reg(result.backup_path)
         assert "prod-db" in bak   # the backup still has it
+
+
+class TestCreating:
+    NEW = {"HostName": "stg.example.com", "UserName": "ops",
+           "PortNumber": "2222", "Protocol": "ssh"}
+
+    def test_create_appends_section_and_keeps_rest_identical(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before_text = reg.read_bytes().decode("utf-16")
+        result = create_session(
+            reg, "Staging Web 2", self.NEW,
+            expect_stamp=reg_file_stamp(reg))
+        after_text = reg.read_bytes().decode("utf-16")
+
+        # append-only: everything that was there is byte-identical
+        assert after_text.startswith(before_text)
+        # the new section: one blank separator, quoted header, values
+        quoted_header = ("[HKEY_CURRENT_USER\\Software\\SimonTatham\\"
+                         "PuTTY\\Sessions\\Staging%20Web%202]")
+        assert quoted_header in after_text
+        assert '"HostName"="stg.example.com"\r\n' in after_text
+        assert '"PortNumber"=dword:000008ae\r\n' in after_text
+        # parse: exactly the old sessions + the new one
+        parsed = parse_putty_reg(reg)
+        assert parsed["Staging%20Web%202"] == self.NEW  # port reads 2222
+        assert parsed["prod-db"]["UserName"] == "postgres"
+        assert parsed["prod-web-1"]["UserName"] == "deploy"
+        assert result.name == "Staging%20Web%202"
+        assert result.session_values == self.NEW
+
+    def test_create_duplicate_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="already exists"):
+            create_session(reg, "prod-db", {"HostName": "h"},
+                           expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_create_quote_in_value_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="quote"):
+            create_session(reg, "new-session",
+                           {"RemoteCommand": 'say "hi"'},
+                           expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_create_bad_name_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        for bad in ('has "quotes"', "two\nlines", "two\rlines"):
+            with pytest.raises(RegEditError, match="malformed"):
+                create_session(reg, bad, {"HostName": "h"},
+                              expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_create_unknown_key_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="not editable"):
+            create_session(reg, "new-session", {"Present": "0"},
+                           expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_create_empty_values_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="nothing to create"):
+            create_session(reg, "new-session", {},
+                           expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_create_stamp_mismatch_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        stamp = reg_file_stamp(reg)
+        # someone re-exported on the Windows side after the dialog opened
+        reg.write_bytes(b"\xff\xfe" + SAMPLE
+                        .replace("deploy", "deployer")
+                        .encode("utf-16-le"))
+        expected = reg.read_bytes()
+        with pytest.raises(RegEditError, match="changed on disk"):
+            create_session(reg, "new-session", {"HostName": "h"},
+                           expect_stamp=stamp)
+        assert reg.read_bytes() == expected
+
+    def test_create_port_out_of_range_refused(self, tmp_path):
+        reg = make_reg(tmp_path)
+        before = reg.read_bytes()
+        with pytest.raises(RegEditError, match="1-65535"):
+            create_session(reg, "new-session",
+                           {**self.NEW, "PortNumber": "99999"},
+                           expect_stamp=reg_file_stamp(reg))
+        assert reg.read_bytes() == before
+
+    def test_create_matches_file_line_ending(self, tmp_path):
+        """CRLF file gets a CRLF section; a LF-only file gets LF."""
+        reg = make_reg(tmp_path)
+        create_session(reg, "crlf-session", self.NEW,
+                       expect_stamp=reg_file_stamp(reg))
+        after = reg.read_bytes().decode("utf-16")
+        assert "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\" \
+               "Sessions\\crlf-session]\r\n" in after
+
+        lf_text = SAMPLE.replace("\r\n", "\n")
+        reg_lf = make_reg(tmp_path, name="lf.reg", text=lf_text,
+                         encoding="utf-8", bom=b"")
+        create_session(reg_lf, "lf-session", self.NEW,
+                       expect_stamp=reg_file_stamp(reg_lf))
+        after_lf = reg_lf.read_bytes().decode("utf-8")
+        # no stray CR anywhere, and the section uses LF endings
+        assert "\r" not in after_lf
+        assert "[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\" \
+               "Sessions\\lf-session]\n" in after_lf
+        assert '"Protocol"="ssh"\n' in after_lf
+
+    def test_create_backs_up_first(self, tmp_path):
+        reg = make_reg(tmp_path)
+        stamp = reg_file_stamp(reg)
+        result = create_session(reg, "backup-session", {"HostName": "h"},
+                                expect_stamp=stamp)
+        assert result.backup_path is not None
+        assert "backup-session" not in parse_putty_reg(result.backup_path)
 
 
 class TestRecentsRemove:

@@ -883,6 +883,67 @@ class TestMoshAndExtraArgs:
         assert argv[pp_idx + 2].startswith("cat >> ")
         assert argv[argv.index("destroy-unattached") + 1] == "on"
 
+    def test_unique_tmux_name_appends_suffix_until_free(self, monkeypatch):
+        """safe_name flattens 'Foo Bar'/'Foo/Bar' to the same 'Foo_Bar';
+        a duplicate -s name makes new-session fail outright. Two live
+        collisions -> -3; the exact-match '=name' target is used (a
+        plain -t target splits dotted names)."""
+        import subprocess as sp
+
+        from utils.ssh_command_util import _unique_tmux_name
+        queried = []
+
+        def fake_run(argv, *a, **k):
+            queried.append(argv[3])
+            return sp.CompletedProcess(argv, 0 if len(queried) <= 2 else 1)
+
+        monkeypatch.setattr("utils.ssh_command_util.subprocess.run",
+                            fake_run)
+        assert _unique_tmux_name("Foo_Bar") == "Foo_Bar-3"
+        assert queried == ["=Foo_Bar", "=Foo_Bar-2", "=Foo_Bar-3"]
+
+    def test_unique_tmux_name_free_first_try(self, monkeypatch):
+        import subprocess as sp
+
+        from utils.ssh_command_util import _unique_tmux_name
+        monkeypatch.setattr(
+            "utils.ssh_command_util.subprocess.run",
+            lambda *a, **k: sp.CompletedProcess([], 1))
+        assert _unique_tmux_name("My_Session") == "My_Session"
+
+    def test_unique_tmux_name_tmux_unqueryable(self, monkeypatch):
+        """No tmux binary (or it died): best-effort, name unchanged -
+        the launch itself will surface the error."""
+        from utils.ssh_command_util import _unique_tmux_name
+        monkeypatch.setattr(
+            "utils.ssh_command_util.subprocess.run",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("no tmux")))
+        assert _unique_tmux_name("My_Session") == "My_Session"
+
+    def test_wrap_tmux_uniquifies_session_name_only(self, tmp_path,
+                                                     monkeypatch):
+        """Outside tmux with the name already live: -s gets the
+        uniquified name; -n (window, tmux auto-uniquifies) and the log
+        filename keep the raw safe_name so existing logs still match."""
+        import subprocess as sp
+
+        from utils.ssh_command_util import _wrap_tmux
+
+        def fake_run(argv, *a, **k):
+            # only the bare name is taken
+            return sp.CompletedProcess(
+                argv, 0 if argv[3] == "=Foo_Bar" else 1)
+
+        monkeypatch.setattr("utils.ssh_command_util.subprocess.run",
+                            fake_run)
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.delenv("TMUX", raising=False)
+        argv = _wrap_tmux(["ssh", "h"], "Foo Bar", tmp_path / "r.reg")
+        assert argv[argv.index("-s") + 1] == "Foo_Bar-2"   # uniquified
+        assert argv[argv.index("-n") + 1] == "Foo_Bar"     # raw safe_name
+        pp_idx = argv.index("pipe-pane")
+        assert "-Foo_Bar.log" in argv[pp_idx + 2]          # log: raw
+
     def test_inside_tmux_targets_window(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
         monkeypatch.setenv("TMUX", "/tmp/tmux-0/default,0,0")

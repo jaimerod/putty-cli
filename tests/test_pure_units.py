@@ -304,3 +304,66 @@ class TestUsableSessions:
 class TestSessionFieldDefs:
     def test_every_field_has_a_default(self):
         assert {key for _, key in SESSION_FIELDS} == set(SESSION_DEFAULTS)
+
+# ── net_util.run_jump_probe ──────────────────────────────────────────────────
+
+
+class TestRunJumpProbe:
+    def test_success(self, monkeypatch):
+        import utils.net_util as mod
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **k: __import__("subprocess").CompletedProcess(
+                [], 0, stdout="", stderr=""))
+        ok, msg = mod.run_jump_probe(
+            ["ssh", "-J", "jump.example.com", "h"], "jump.example.com")
+        assert ok and msg == "reachable via jump.example.com"
+
+    def test_nonzero_exit_quotes_last_stderr_line(self, monkeypatch):
+        import subprocess as sp
+        import utils.net_util as mod
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **k: sp.CompletedProcess(
+                [], 255, stdout="",
+                stderr="kex_exchange_identification: banner\n"
+                       "ssh: connect to host h port 22: timed out"))
+        ok, msg = mod.run_jump_probe(["ssh", "h"], "j")
+        assert not ok
+        assert msg == "unreachable via j (ssh: connect to host h port 22: timed out)"
+
+    def test_nonzero_exit_empty_output_shows_exit_code(self, monkeypatch):
+        import subprocess as sp
+        import utils.net_util as mod
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **k: sp.CompletedProcess([], 3, stdout="", stderr=""))
+        ok, msg = mod.run_jump_probe(["ssh", "h"], "j")
+        assert not ok and msg == "unreachable via j (ssh exit 3)"
+
+    def test_ssh_binary_missing(self, monkeypatch):
+        import utils.net_util as mod
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("ssh")))
+        ok, msg = mod.run_jump_probe(["ssh", "h"], "j")
+        assert not ok and "ssh not found" in msg
+
+    def test_timeout(self, monkeypatch):
+        import subprocess as sp
+        import utils.net_util as mod
+        monkeypatch.setattr(
+            mod.subprocess, "run",
+            lambda *a, **k: (_ for _ in ()).throw(
+                sp.TimeoutExpired("ssh", 10)))
+        ok, msg = mod.run_jump_probe(["ssh", "h"], "j")
+        assert not ok and "unreachable via" in msg
+
+    def test_empty_argv(self):
+        import utils.net_util as mod
+        assert mod.run_jump_probe([], "j") == (False, "no command to probe")
+        assert mod.run_jump_probe(None, "j") == (False, "no command to probe")
+
+    def test_ping_dead_tuple_removed(self):
+        import utils.net_util as mod
+        assert "_PING_DEAD" not in vars(mod)

@@ -433,6 +433,70 @@ def edit_session_values(
         name=final_name, session_values=edited_values, backup_path=backup_path)
 
 
+def create_session(
+    reg_path: Path,
+    name: str,
+    values: Dict[str, str],
+    expect_stamp: Optional[str] = None,
+) -> RegEditResult:
+    """Create a new session section in the .reg export - same rails as
+    edit_session_values (name guard, staleness stamp, backup, atomic
+    write, re-parse validation).
+
+    The new section is APPENDED at the END of the file, preceded by one
+    blank line like the convention the existing sections follow;
+    everything else stays byte-identical."""
+    _plain_name(name)
+    if not values:
+        raise RegEditError("nothing to create")
+    unknown = set(values) - EDITABLE_KEYS
+    if unknown:
+        raise RegEditError(f"keys not editable: {', '.join(sorted(unknown))}")
+    quoted = quote_reg_name(name)
+    if not quoted:
+        raise RegEditError("session name must not be empty")
+
+    text, codec = _load_for_write(reg_path, expect_stamp)
+    old_sessions = _parse_content(text)
+    if quoted in old_sessions:
+        raise RegEditError(f"a session named {name!r} already exists")
+
+    # section lines in the file's dominant line ending; style="" lets
+    # _encode_value_line pick each key's natural form (dword for
+    # PortNumber, quoted otherwise) - and run its value guards
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = [f"[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY\\"
+             f"Sessions\\{quoted}]{eol}"]
+    for key, value in values.items():
+        lines.append(_encode_value_line(key, value, style="") + eol)
+
+    # append: make sure the text ends with a line ending, then add ONE
+    # blank separator line unless one is already there
+    new_text = text
+    if new_text and not new_text.endswith(eol):
+        new_text += eol
+    if new_text.strip() and not new_text.endswith(eol * 2):
+        new_text += eol
+    new_text += "".join(lines)
+
+    # validation: exactly the new session appears, with these values
+    new_sessions = _parse_content(new_text)
+    expected = dict(values)
+    if "PortNumber" in expected:
+        expected["PortNumber"] = str(int(expected["PortNumber"]))
+    if new_sessions != {**old_sessions, quoted: expected}:
+        raise RegEditError(
+            "post-create validation failed: the session set or the new "
+            "session's values differ")
+
+    backup_path = _commit(
+        reg_path, new_text, codec,
+        lambda final: _parse_content(final).get(quoted) == expected)
+    return RegEditResult(
+        name=quoted, session_values=new_sessions[quoted],
+        backup_path=backup_path)
+
+
 def _backup(reg_path: Path) -> Optional[Path]:
     """Copy current bytes to <name>.bak-<timestamp>; keep the newest 5."""
     ts = time.strftime("%Y%m%d-%H%M%S")

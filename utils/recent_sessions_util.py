@@ -109,7 +109,9 @@ def update_recent_sessions(
     recent_file: Path, selected_name: str, exit_code: Optional[int] = None
 ) -> None:
     """Prepend selected_name to the recents file, keeping MAX_ENTRIES
-    unique entries."""
+    unique entries. The atomic replace prevents truncation, not
+    races: concurrent instances can still lose each other's entries
+    (last writer wins) - acceptable for a personal recents list."""
     prev_names = [
         str(e["name"]) for e in _read_entries(recent_file)
         if str(e["name"]) != selected_name
