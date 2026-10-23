@@ -676,7 +676,9 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self._open_reg_modal(
             session_name,
             build_modal=lambda: EditSessionModal(
-                session_name, self.usable[session_name]),
+                session_name, self.usable[session_name],
+                reg_dir=self.reg_path.parent
+                if self.reg_path is not None else None),
             keybar=self.KEYBAR_EDIT,
             on_confirm=self._edit_saved,
         )
@@ -894,7 +896,10 @@ class SessionBrowser(KeyBarOwner, App[int]):
         from .tui_actions import EditSessionModal
         self._edit_stamp = reg_file_stamp(self.reg_path)
         self._set_keybar(self.KEYBAR_EDIT)
-        modal = EditSessionModal(None, {}, create=True)
+        modal = EditSessionModal(
+            None, {}, create=True,
+            reg_dir=self.reg_path.parent
+            if self.reg_path is not None else None)
 
         def on_result(payload: Optional[Dict[str, Any]]) -> None:
             self._set_keybar(self.KEYBAR_LIST)

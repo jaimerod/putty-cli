@@ -1,4 +1,5 @@
 import os
+import re
 import shlex
 import subprocess  # nosec
 import sys
@@ -11,6 +12,60 @@ from .session_util import jump_host_of
 
 # Root under which Windows drives appear (WSL). Injectable for tests.
 WSL_MNT_ROOT = Path("/mnt")
+
+#: a Windows drive-letter path like C:\Users\me\keys
+_WIN_PATH_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+
+
+def reg_friendly_path(picked: Path,
+                      reg_dir: Optional[Path] = None) -> str:
+    """Store a picked key file the way BOTH PuTTY and putty-cli resolve.
+
+    - directly in the .reg export's directory -> bare filename
+      (portable PuTTY style; putty-cli resolves it relative to the .reg)
+    - under the WSL mount of a Windows drive -> the C:\\... form
+      (PuTTY's native path; putty-cli maps it back under /mnt)
+    - anywhere else -> the absolute Linux path
+    """
+    if reg_dir is not None:
+        try:
+            rel = picked.resolve().relative_to(reg_dir.resolve())
+        except (ValueError, OSError):
+            pass
+        else:
+            if len(rel.parts) == 1:
+                return rel.parts[0]
+    parts = picked.resolve().parts
+    # under the WSL mount of a single drive letter: /mnt/c/... -> C:\...
+    root = WSL_MNT_ROOT.parts
+    if len(parts) > len(root) and parts[:len(root)] == root \
+            and len(parts[len(root)]) == 1:
+        drive = parts[len(root)].upper()
+        return f"{drive}:\\" + "\\".join(parts[len(root) + 1:])
+    return str(picked)
+
+
+def browsable_key_dir(value: str,
+                      reg_dir: Optional[Path]) -> Optional[Path]:
+    """Where to open the key picker, from the current Key field value:
+
+    C:\\... maps back under the WSL mount; an absolute path uses its
+    parent; a relative name means the .reg's directory (or a subdir of
+    it); an empty value starts at reg_dir. None lets the caller pick
+    its own fallback."""
+    v = (value or "").strip()
+    m = _WIN_PATH_RE.match(v)
+    if m:
+        rest = m.group(2).replace("\\", "/")
+        mapped = WSL_MNT_ROOT / m.group(1).lower() / rest if rest \
+            else WSL_MNT_ROOT / m.group(1).lower()
+        return mapped.parent
+    if v.startswith("/"):
+        return Path(v).parent
+    if v:
+        base = reg_dir if reg_dir is not None else Path.home()
+        return (base / v).parent
+    return reg_dir
 
 
 def safe_name(session_name: str) -> str:

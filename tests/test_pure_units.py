@@ -7,6 +7,7 @@ directly testable - no monkeypatching of subprocess/time required.
 import collections
 
 import shutil
+from pathlib import Path
 
 from utils.display_util import separator, separator_term, terminal_width
 from utils.net_util import interpret_ping_output
@@ -21,7 +22,9 @@ from utils.session_util import (
     session_value,
     usable_sessions,
 )
-from utils.ssh_command_util import _plan_mosh, _plan_ssh
+from utils.ssh_command_util import (
+    _plan_mosh, _plan_ssh, browsable_key_dir, reg_friendly_path,
+)
 
 # ── net_util.interpret_ping_output ───────────────────────────────────────────
 
@@ -367,3 +370,40 @@ class TestRunJumpProbe:
     def test_ping_dead_tuple_removed(self):
         import utils.net_util as mod
         assert "_PING_DEAD" not in vars(mod)
+
+
+class TestKeyPathHelpers:
+    """reg_friendly_path / browsable_key_dir: picked key files are
+    stored so PuTTY (Windows) and putty-cli both resolve them."""
+
+    def test_next_to_reg_is_bare_filename(self, tmp_path):
+        assert reg_friendly_path(tmp_path / "k.ppk", tmp_path) == "k.ppk"
+
+    def test_subdir_is_absolute(self, tmp_path):
+        assert reg_friendly_path(tmp_path / "sub" / "k.ppk", tmp_path) \
+            == str(tmp_path / "sub" / "k.ppk")
+
+    def test_wsl_drive_letter_becomes_windows_path(self, tmp_path,
+                                                   monkeypatch):
+        from utils import ssh_command_util as scu
+        monkeypatch.setattr(scu, "WSL_MNT_ROOT", tmp_path / "mnt")
+        picked = tmp_path / "mnt" / "e" / "Users" / "me" / "k.ppk"
+        assert reg_friendly_path(picked, tmp_path / "other") \
+            == "E:\\Users\\me\\k.ppk"
+
+    def test_browse_from_windows_path(self):
+        assert browsable_key_dir(r"C:\Users\me\keys\k.ppk", None) \
+            == Path("/mnt/c/Users/me/keys")
+
+    def test_browse_from_absolute_path(self):
+        assert browsable_key_dir("/home/u/.ssh/k", None) \
+            == Path("/home/u/.ssh")
+
+    def test_browse_bare_name_starts_at_reg_dir(self, tmp_path):
+        assert browsable_key_dir("k.ppk", tmp_path) == tmp_path
+
+    def test_browse_relative_subpath(self, tmp_path):
+        assert browsable_key_dir("keys/k.ppk", tmp_path) == tmp_path / "keys"
+
+    def test_browse_empty_starts_at_reg_dir(self, tmp_path):
+        assert browsable_key_dir("", tmp_path) == tmp_path

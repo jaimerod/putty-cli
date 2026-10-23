@@ -13,12 +13,13 @@ from textual.widgets import Input, ListItem, ListView, RichLog, Rule, Static
 
 from .clipboard_util import copy_command
 from .far_dialog import (
-    FarCloseButton, FarDialogScreen, FarValueField,
+    FarCloseButton, FarDialogScreen, FarFlatButton, FarValueField,
     underlying_browser_screen,
 )
 from .far_style import ACTIVE_PALETTE, FARKeyBar, KeyBarOwner
 from .net_util import run_ping
 from .session_util import SESSION_DEFAULTS, SESSION_FIELDS, session_value
+from .ssh_command_util import browsable_key_dir, reg_friendly_path
 from .titlecase_util import unquote_display
 
 __all__ = [
@@ -197,6 +198,99 @@ class SessionActionMenu(FarDialogScreen[Optional[str]]):
         self.dismiss(None)
 
 
+class KeyPickerModal(FarDialogScreen[Optional[str]]):
+    """FAR file panel to pick an SSH key (.ppk) file.
+
+    Enter on a directory descends, "../" goes up, Enter on a file
+    dismisses with its absolute path, Esc cancels (None). Only
+    directories and *.ppk files are listed (PuTTY key files).
+    """
+
+    box_width = 60
+    FOCUS_TARGET = "#key-list"
+    BUTTONS = []
+
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = f"""
+    #key-list {{
+        height: auto;
+        max-height: 14;
+        background: {ACTIVE_PALETTE.popup_bg};
+        color: {ACTIVE_PALETTE.popup_text};
+    }}
+    #key-list > ListItem.--highlight {{
+        background: {ACTIVE_PALETTE.selected_bg};
+        color: {ACTIVE_PALETTE.selected_fg};
+        text-style: bold;
+    }}
+    """
+
+    def __init__(self, start_dir: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._dir = Path(start_dir)
+        self._paths: List[Optional[Path]] = []
+        self.TITLE = "SSH key file"
+
+    def compose_body(self):
+        yield ListView(id="key-list")
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        self._fill()
+
+    def _fill(self) -> None:
+        """(Re)build the rows: ../ up, dirs first, then *.ppk files."""
+        view = self.query_one("#key-list", ListView)
+        view.clear()
+        self._paths = []
+        parent = self._dir.parent
+        if parent != self._dir:
+            self._paths.append(parent)
+            view.append(ListItem(Static("../", markup=False)))
+        try:
+            entries = sorted(self._dir.iterdir(),
+                             key=lambda p: p.name.lower())
+        except OSError:
+            self._paths.append(None)
+            view.append(ListItem(Static("(unreadable)", markup=False)))
+        else:
+            for p in entries:
+                if p.name.startswith("."):
+                    continue
+                if p.is_dir():
+                    self._paths.append(p)
+                    view.append(ListItem(Static(p.name + "/",
+                                                 markup=False)))
+                elif p.is_file() and p.suffix.lower() == ".ppk":
+                    self._paths.append(p)
+                    view.append(ListItem(Static(p.name, markup=False)))
+        if view.index is None:
+            view.index = 0
+        # live caption: the chassis stamped the border title at mount
+        self.query_one("#far-box").border_title = \
+            f"SSH key: {self._dir}"
+
+    def on_list_view_selected(self, event: "ListView.Selected") -> None:
+        try:
+            index = list(self.query(ListItem)).index(event.item)
+        except ValueError:  # pragma: no cover - structural invariant
+            return
+        target = self._paths[index] if index < len(self._paths) else None
+        if target is None:
+            return
+        if target.is_dir():
+            self._dir = target
+            self._fill()
+        else:
+            self.dismiss(str(target))
+
+    async def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class EditSessionModal(FarDialogScreen):
     """FAR dialog mimicking PuTTY's connection settings.
 
@@ -228,12 +322,19 @@ class EditSessionModal(FarDialogScreen):
         ("escape", "cancel", "Cancel"),
     ]
 
+    # the inline Browse button on the Key row is narrower than the
+    # dialog's bottom buttons
+    DEFAULT_CSS = """
+    .far-row .far-btn { min-width: 6; }
+    """
+
     def __init__(self, session_name: Optional[str],
                  session: Dict[str, Any], create: bool = False,
-                 **kwargs) -> None:
+                 reg_dir: Optional[Path] = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.session_name = session_name
         self._create = create
+        self._reg_dir = reg_dir   # key-picker start dir + path style
         if create:
             self.TITLE = "New Connection"
         else:
@@ -261,6 +362,10 @@ class EditSessionModal(FarDialogScreen):
                 yield Static(label, classes="far-label", markup=False)
                 yield Input(value=self._original[key],
                             id=f"edit-{key}")
+                if key == "PublicKeyFile":
+                    # file picker for the key: Enter/click opens the
+                    # FAR panel (focus chain joins via .far-btn)
+                    yield FarFlatButton("Browse", "screen.pick_key")
         yield Static("", id="edit-error", markup=False)
 
     def _focus_next_field(self, current: Input) -> None:
@@ -347,6 +452,20 @@ class EditSessionModal(FarDialogScreen):
         elif not jump and self._orig_method == "6":
             changes["ProxyMethod"] = "0"
         return {"values": changes, "rename_to": rename_to}
+
+    async def action_pick_key(self) -> None:
+        """Open the FAR key-file picker for the Key (.ppk) field; the
+        picked path is stored in PuTTY-and-putty-cli friendly form."""
+        start = browsable_key_dir(
+            self.query_one("#edit-PublicKeyFile", Input).value,
+            self._reg_dir) or Path.home()
+
+        def on_result(picked: Optional[str]) -> None:
+            if picked:
+                self.query_one("#edit-PublicKeyFile", Input).value = \
+                    reg_friendly_path(Path(picked), self._reg_dir)
+
+        self.app.push_screen(KeyPickerModal(start), callback=on_result)
 
     async def action_save(self) -> None:
         payload = self._collect()

@@ -12,7 +12,7 @@ pytest.importorskip("textual")
 
 from textual import events
 from textual.color import Color
-from textual.widgets import Input
+from textual.widgets import Input, ListView, Static
 
 import putty
 from utils.far_style import ACTIVE_PALETTE, to_textual_theme
@@ -1866,6 +1866,72 @@ class TestEditModal:
             assert (shadow.region.x, shadow.region.y) \
                 == (box.region.x + 2, box.region.y + 1)
             assert str(shadow.content)
+
+    async def test_browse_picks_key_file(self, tmp_path):
+        """The Key row's Browse button opens the FAR file panel; picking
+        a .ppk next to the .reg stores the bare (portable) filename."""
+        from utils.tui_actions import KeyPickerModal
+        app, _reg = self._setup(tmp_path)
+        (tmp_path / "pickme.ppk").write_text("PPKFILE")
+        (tmp_path / "keys").mkdir()
+        (tmp_path / "keys" / "nested.ppk").write_text("PPKFILE")
+        (tmp_path / "not-a-key.txt").write_text("ignored")
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            assert modal.query_one("#edit-PublicKeyFile",
+                                   Input).value == ""
+            await pilot.click(".far-row .far-btn")     # Browse
+            for _ in range(2):
+                await pilot.pause()
+            assert isinstance(app.screen, KeyPickerModal)
+            # ../ first, then dirs, then .ppk files (txt ignored)
+            view = app.screen.query_one("#key-list", ListView)
+            row_texts = [
+                str(item.query_one(Static).content)
+                for item in view.children
+            ]
+            assert "keys/" in row_texts and "pickme.ppk" in row_texts
+            assert not any("not-a-key" in t for t in row_texts)
+            view.index = row_texts.index("pickme.ppk")
+            await pilot.press("enter")
+            for _ in range(3):
+                await pilot.pause()
+            assert app.screen is modal            # back on the dialog
+            assert modal.query_one("#edit-PublicKeyFile",
+                                   Input).value == "pickme.ppk"
+
+    async def test_key_picker_navigates_and_cancels(self, tmp_path):
+        from utils.tui_actions import KeyPickerModal
+        app, _reg = self._setup(tmp_path)
+        (tmp_path / "keys").mkdir()
+        (tmp_path / "keys" / "nested.ppk").write_text("PPKFILE")
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            await pilot.click(".far-row .far-btn")
+            await pilot.pause()
+            picker = app.screen
+            assert isinstance(picker, KeyPickerModal)
+            # descend into keys/
+            view = picker.query_one("#key-list", ListView)
+            view.index = 1                          # keys/
+            await pilot.press("enter")
+            await pilot.pause()
+            assert picker.query_one("#key-list", ListView).children
+            # cancel: the dialog's key field stays untouched
+            await pilot.press("escape")
+            for _ in range(2):
+                await pilot.pause()
+            assert app.screen is modal
+            assert modal.query_one("#edit-PublicKeyFile",
+                                   Input).value == ""
 
     async def test_close_button_rides_chrome_and_dismisses(self, tmp_path):
         """[X] sits inline with the box's top-right border chrome and a
