@@ -1478,8 +1478,11 @@ class TestSessionActionMenu:
             await pilot.pause()
             # drive the same production entry the click handler calls
             # (posting synthetic Clicks to a pushed modal is flaky under
-            # the pilot's message pump)
-            app._last_cursor = (app.query_one("#sessions").region.x + 8, 16)
+            # the pilot's message pump); anchor the cursor to a real
+            # session ROW so the shadow echo covers painted content
+            # (not layout-dependent blank rows)
+            first_row = app.query_one("#sessions").children[0].region
+            app._last_cursor = (first_row.x + 8, first_row.y)
             await app.run_action_with_modal("prod:web-1")
             for _ in range(9):
                 await pilot.pause()

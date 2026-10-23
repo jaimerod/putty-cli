@@ -210,9 +210,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
     ListView > ListItem.--highlight {{ background: $primary;
         color: {ACTIVE_PALETTE.highlight_fg}; }}
     #filter {{ dock: top; background: $background; color: $foreground;
-             border: solid {ACTIVE_PALETTE.frame}; margin: 1 1 1 1; }}
-    #title-bar {{ dock: top; height: 1; color: $secondary;
-                 background: $background; padding: 0 1; }}
+             border: solid {ACTIVE_PALETTE.frame}; margin: 0 1; }}
     /* windows inset 1 from the screen edges and from each other */
     #list-col {{ width: 2fr; padding: 0 1; }}
     #recent-win {{ height: 40%; }}
@@ -295,11 +293,6 @@ class SessionBrowser(KeyBarOwner, App[int]):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            "PuTTY Sessions  ▒  Enter connect · Tab panes · right-click "
-            "menu · / filter",
-            id="title-bar", markup=False,
-        )
         yield Input(placeholder="/filter…", id="filter")
         with Horizontal():
             # far-shadow mounts BEFORE its window -> renders underneath
