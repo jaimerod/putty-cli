@@ -235,11 +235,15 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         padding: 0;
         layer: window;
         layout: vertical;
-        /* invisible until _place() applies the final offset - the
-           box would otherwise flash in the top-left corner for one
-           frame before the measured centering lands (layout still
-           runs, so the region/measure stages keep working) */
-        opacity: 0;
+        /* parked OFF-SCREEN until _place() sets the real offset: the
+           box would otherwise paint at the top-left corner for the
+           frames between mount and placement. Neither opacity:0 (it
+           still paints every cell color-blended - an opaque slab over
+           the underlying screen) nor visibility:hidden (it drops the
+           widget from the compositor map, so its region reads 0x0 and
+           placement cannot measure it) works; an off-screen offset
+           keeps it laid out and measurable while painting nothing. */
+        offset: -9999 -9999;
     }}
 
     .far-row {{
@@ -392,9 +396,8 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         else:
             x, y = self._popup_origin(box)
         box.styles.offset = (x, y)
-        # reveal at the final position: the paint that shows the box
-        # already carries the offset (no top-left flash)
-        box.styles.opacity = 1
+        # the first paint after this lands the box at its final
+        # position (it was parked off-screen until here)
         # the compositor map still holds the pre-offset origin here;
         # remember the TARGET region so the shadow lands at
         # box + (2, 1) instead of the stale (0, 0)

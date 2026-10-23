@@ -1811,9 +1811,11 @@ class TestEditModal:
             await app.push_screen(modal)   # awaited = mount, not paint
             box = modal.query_one("#far-box")
             shadow = modal.query_one("#far-shadow")
-            assert box.styles.opacity == 0  # hidden before placement
+            # parked off-screen: nothing of the box paints before _place
+            assert box.region.x < -1000 and box.region.y < -1000
+            assert box.region.width > 0  # ...but it still measures
             await pilot.pause()             # measure/place/sync batch
-            assert box.styles.opacity == 1
+            assert box.region.x > 0        # placed on-screen now
             # revealed at the CENTERED position, never the top-left
             assert abs((box.region.x + box.region.width // 2)
                        - modal.size.width // 2) <= 1
