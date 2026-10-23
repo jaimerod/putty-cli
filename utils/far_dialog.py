@@ -436,9 +436,9 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
             x, y = self._popup_origin(box)
         box.styles.offset = (x, y)
         # the [X] rides the box's top-right border dashes:
-        # 3 glyphs, flush against the corner glyph
+        # 3 glyphs, one dash of breathing room before the corner glyph
         self.query_one("#far-close", Static).styles.offset = (
-            x + box.region.width - 4, y)
+            x + box.region.width - 5, y)
         # the first paint after this lands the box at its final
         # position (it was parked off-screen until here)
         # the compositor map still holds the pre-offset origin here;

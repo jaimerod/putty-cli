@@ -1862,11 +1862,11 @@ class TestEditModal:
             assert isinstance(modal, EditSessionModal)
             box = modal.query_one("#far-box")
             close = modal.query_one("#far-close")
-            # inline with the top border, flush against the corner
+            # inline with the top border, one dash shy of the corner
             assert close.region.y == box.region.y
             assert close.region.x > box.region.x
             assert close.region.x + close.region.width \
-                == box.region.x + box.region.width - 1
+                == box.region.x + box.region.width - 2
             await pilot.click("#far-close")
             for _ in range(3):
                 await pilot.pause()
