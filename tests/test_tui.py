@@ -1797,6 +1797,27 @@ class TestEditModal:
             {self.NAME: dict(self.SESSION)}, [], {}, reg)
         return app, reg
 
+    async def test_modal_hidden_until_placed_no_top_left_flash(self, tmp_path):
+        """Regression: the dialog box painted at its default top-left
+        spot for one frame, then teleported to the center. The box must
+        stay invisible until _place() applies the final offset."""
+        from utils.tui_actions import EditSessionModal
+        app, _reg = self._setup(tmp_path)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            modal = EditSessionModal(self.NAME, dict(self.SESSION))
+            await app.push_screen(modal)   # awaited = mount, not paint
+            box = modal.query_one("#far-box")
+            assert box.styles.opacity == 0  # hidden before placement
+            await pilot.pause()             # _place() runs, repaints
+            assert box.styles.opacity == 1
+            # revealed at the CENTERED position, never the top-left
+            assert abs((box.region.x + box.region.width // 2)
+                       - modal.size.width // 2) <= 1
+            assert abs((box.region.y + box.region.height // 2)
+                       - modal.size.height // 2) <= 1
+            assert box.region.x > 0 and box.region.y > 0
+
     async def test_prefills_from_session(self, tmp_path):
         app, _reg = self._setup(tmp_path)
         from utils.tui_actions import EditSessionModal
