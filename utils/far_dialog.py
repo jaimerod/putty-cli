@@ -139,12 +139,6 @@ def sync_far_shadow_region(region: Region, shadow: Any, underlying: Any,
     shadow.update("\n".join(dimmed))
 
 
-def sync_far_shadow(box: Any, shadow: Any, underlying: Any,
-                    offset: Tuple[int, int] = SHADOW_OFFSET) -> None:
-    """Back-compat wrapper: sync from the box widget's live region."""
-    sync_far_shadow_region(box.region, shadow, underlying, offset)
-
-
 class FarValueField(Static, can_focus=False):
     """Read-only value field (Textual's Input has no read-only mode):
     a field-styled Static with a value property, set programmatically.
@@ -402,10 +396,16 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
         # already carries the offset (no top-left flash)
         box.styles.opacity = 1
         # the compositor map still holds the pre-offset origin here;
-        # remember the TARGET region so the shadow (synced one frame
-        # later) lands at box + (2, 1) instead of the stale (0, 0)
+        # remember the TARGET region so the shadow lands at
+        # box + (2, 1) instead of the stale (0, 0)
         self._box_region = box.region.at_offset((x, y))
-        self.call_after_refresh(self._sync_shadow)
+        # sync the shadow NOW, in the same callback batch: deferring it
+        # one refresh let a paint slip in between in real terminals, so
+        # the black slab popped in a frame after the box (a visible
+        # flash). _box_region carries the final geometry and the
+        # underlying raster is already painted, so nothing needs to
+        # wait for.
+        self._sync_shadow()
 
     def _popup_origin(self, box: Any) -> Tuple[int, int]:
         """Subclasses with centered=False override this (cursor menus)."""

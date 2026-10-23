@@ -1800,7 +1800,9 @@ class TestEditModal:
     async def test_modal_hidden_until_placed_no_top_left_flash(self, tmp_path):
         """Regression: the dialog box painted at its default top-left
         spot for one frame, then teleported to the center. The box must
-        stay invisible until _place() applies the final offset."""
+        stay invisible until _place() applies the final offset - and
+        the drop shadow must arrive in the SAME batch, not pop in a
+        frame later."""
         from utils.tui_actions import EditSessionModal
         app, _reg = self._setup(tmp_path)
         async with app.run_test(size=(110, 30)) as pilot:
@@ -1808,8 +1810,9 @@ class TestEditModal:
             modal = EditSessionModal(self.NAME, dict(self.SESSION))
             await app.push_screen(modal)   # awaited = mount, not paint
             box = modal.query_one("#far-box")
+            shadow = modal.query_one("#far-shadow")
             assert box.styles.opacity == 0  # hidden before placement
-            await pilot.pause()             # _place() runs, repaints
+            await pilot.pause()             # measure/place/sync batch
             assert box.styles.opacity == 1
             # revealed at the CENTERED position, never the top-left
             assert abs((box.region.x + box.region.width // 2)
@@ -1817,6 +1820,12 @@ class TestEditModal:
             assert abs((box.region.y + box.region.height // 2)
                        - modal.size.height // 2) <= 1
             assert box.region.x > 0 and box.region.y > 0
+            # the shadow arrived with the box (same batch): sized to
+            # the target region, offset +2/+1, echo content painted
+            assert shadow.region.width == box.region.width
+            assert (shadow.region.x, shadow.region.y) \
+                == (box.region.x + 2, box.region.y + 1)
+            assert str(shadow.content)
 
     async def test_prefills_from_session(self, tmp_path):
         app, _reg = self._setup(tmp_path)
