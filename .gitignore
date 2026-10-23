@@ -5,4 +5,5 @@ __pycache__/
 .coverage
 htmlcov/
 .claude/
-.envputty_cli.egg-info/
+.env
+putty_cli.egg-info/
