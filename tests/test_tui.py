@@ -2509,7 +2509,7 @@ class TestTuiRegReload:
                       ("beta", "b.example.com"))  # stamp changes...
             def boom(_path):
                 raise PermissionError("read failed")
-            monkeypatch.setattr(browser_mod, "parse_putty_reg", boom)
+            monkeypatch.setattr(browser_mod, "parse_putty_reg_cached", boom)
             app._check_reg_changed()
             await pilot.pause()
             assert "alpha" in app.usable      # last good snapshot kept

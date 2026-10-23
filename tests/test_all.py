@@ -1776,3 +1776,68 @@ class TestRegReload:
         assert "second" not in seen_usable[0]     # first snapshot: before
         assert "second" in seen_usable[1]         # reloaded: after
         assert ".reg file changed" in err.getvalue()
+
+
+class TestRegSnapshot:
+    """parse_putty_reg_cached: local snapshot keyed by (size, mtime_ns).
+
+    The .reg usually lives on /mnt/c (WSL 9P + OneDrive) where a cold
+    full read takes seconds; a stat is one metadata hop."""
+
+    HEADER = ("[HKEY_CURRENT_USER\\Software\\SimonTatham\\PuTTY"
+              "\\Sessions\\alpha]\n")
+
+    def _reg(self, tmp_path, host="a.example.com"):
+        reg = tmp_path / "putty.reg"
+        reg.write_bytes(("﻿" + self.HEADER + f'"HostName"="{host}"\n'
+                         ).encode("utf-8"))
+        return reg
+
+    def test_first_call_creates_snapshot(self, tmp_path, monkeypatch):
+        from utils.putty_parse_util import parse_putty_reg_cached
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        reg = self._reg(tmp_path)
+        sessions = parse_putty_reg_cached(reg)
+        assert "alpha" in sessions
+        snap = tmp_path / "home" / ".cache" / "putty-cli"
+        assert (snap / "reg-snapshot.reg").is_file()
+        assert (snap / "reg-snapshot.stamp").is_file()
+
+    def test_fresh_stamp_reads_snapshot_not_source(
+            self, tmp_path, monkeypatch):
+        """Same (size, mtime_ns) => the SOURCE is not re-read: an
+        undetectable same-size edit still shows snapshot content."""
+        from utils.putty_parse_util import file_stamp, parse_putty_reg_cached
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        reg = self._reg(tmp_path, host="aaa.example.com")
+        first = parse_putty_reg_cached(reg)
+        stamp = file_stamp(reg)
+        # same-size edit with the mtime_ns restored = invisible to stat
+        self._reg(tmp_path, host="bbb.example.com")
+        import os
+        os.utime(reg, ns=(stamp[1], stamp[1]))
+        second = parse_putty_reg_cached(reg)
+        assert first["alpha"] == second["alpha"]        # snapshot won
+        assert second["alpha"]["HostName"] == "aaa.example.com"
+
+    def test_changed_stamp_refreshes(self, tmp_path, monkeypatch):
+        from utils.putty_parse_util import parse_putty_reg_cached
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        reg = self._reg(tmp_path, host="a.example.com")
+        assert "alpha" in parse_putty_reg_cached(reg)
+        # a genuinely different file (different size): re-read + refresh
+        reg.write_bytes(("﻿" + self.HEADER
+                         + '"HostName"="a.example.com"\n'
+                         + '"UserName"="ops"\n').encode("utf-8"))
+        sessions = parse_putty_reg_cached(reg)
+        assert sessions["alpha"]["UserName"] == "ops"
+        snap = (tmp_path / "home" / ".cache" / "putty-cli"
+                / "reg-snapshot.reg")
+        assert b"ops" in snap.read_bytes()             # snapshot updated
+
+    def test_missing_file_still_raises(self, tmp_path, monkeypatch):
+        from utils.putty_parse_util import parse_putty_reg_cached
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        import pytest
+        with pytest.raises(FileNotFoundError):
+            parse_putty_reg_cached(tmp_path / "nope.reg")

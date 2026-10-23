@@ -30,7 +30,7 @@ from .far_style import (
     KeyBarOwner,
     install_far_theme,
 )
-from .putty_parse_util import file_stamp, parse_putty_reg
+from .putty_parse_util import file_stamp, parse_putty_reg_cached
 from .putty_reg_write_util import (
     RegEditError,
     delete_session,
@@ -394,7 +394,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
         self._reg_stamp = stamp
         try:
             reloaded = usable_sessions(
-                parse_putty_reg(self.reg_path),
+                parse_putty_reg_cached(self.reg_path),
                 include_archived=self.include_archived)
         except Exception:  # noqa: BLE001 - keep the last good snapshot
             self._status("✗ .reg changed but could not be re-read")

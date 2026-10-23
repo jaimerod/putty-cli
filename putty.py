@@ -26,7 +26,11 @@ from utils.menu_flow import (  # noqa: F401 - re-exported for tests/back-compat
     ping_host,
     run_menu_flow,
 )
-from utils.putty_parse_util import file_stamp, parse_putty_reg  # noqa: F401
+from utils.putty_parse_util import (  # noqa: F401 - re-exported for tests
+    file_stamp,
+    parse_putty_reg,
+)
+from utils.putty_parse_util import parse_putty_reg_cached
 from utils.recent_sessions_util import load_recent_entries, load_recent_sessions
 from utils.session_util import usable_sessions  # noqa: F401
 
@@ -164,7 +168,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     recent_file = Path.home() / ".putty_recent_sessions"
 
     try:
-        sessions: Dict[str, Dict[str, Any]] = parse_putty_reg(reg_path)
+        sessions: Dict[str, Dict[str, Any]] = parse_putty_reg_cached(reg_path)
     except FileNotFoundError:
         print(f"Error: .reg file not found: {reg_path}", file=sys.stderr)
         return 1

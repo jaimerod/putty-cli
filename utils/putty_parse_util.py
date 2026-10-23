@@ -87,3 +87,45 @@ def parse_putty_reg(file_path: Path) -> Dict[str, Dict[str, str]]:
         raise FileNotFoundError(f".reg file not found: {file_path}")
 
     return _parse_content(_read_reg_text(file_path))
+
+
+def _snapshot_paths() -> Tuple[Path, Path]:
+    """(snapshot .reg copy, stamp file) under ~/.cache/putty-cli/."""
+    cache = Path.home() / ".cache" / "putty-cli"
+    return (cache / "reg-snapshot.reg", cache / "reg-snapshot.stamp")
+
+
+def parse_putty_reg_cached(file_path: Path) -> Dict[str, Dict[str, str]]:
+    """parse_putty_reg via a LOCAL snapshot when one is fresh.
+
+    The .reg typically lives on /mnt/c (WSL's 9P filesystem, often under
+    OneDrive): a cold full read can take seconds, while a stat is a
+    single metadata hop. The snapshot refreshes from the source whenever
+    its (size, mtime_ns) stamp changes, so callers get the same
+    freshness at the cost of one stat. Any snapshot trouble falls back
+    to reading the source directly (same errors as parse_putty_reg).
+    """
+    snapshot, stamp_file = _snapshot_paths()
+    stamp = file_stamp(file_path)   # None when missing/unreadable
+    try:
+        if stamp is not None:
+            saved = stamp_file.read_text(encoding="utf-8").strip()
+            if saved == f"{file_path.resolve()}|{stamp[0]}|{stamp[1]}" \
+                    and snapshot.is_file():
+                return _parse_content(_read_reg_text(snapshot))
+    except OSError:
+        pass  # no/Corrupt snapshot: fall through to the real read
+
+    sessions = parse_putty_reg(file_path)   # the slow path, only here
+    try:  # best-effort snapshot refresh; never fatal
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        tmp = snapshot.with_name(snapshot.name + ".tmp")
+        tmp.write_bytes(file_path.read_bytes())
+        tmp.replace(snapshot)
+        if stamp is not None:
+            stamp_file.write_text(
+                f"{file_path.resolve()}|{stamp[0]}|{stamp[1]}\n",
+                encoding="utf-8")
+    except OSError:
+        pass
+    return sessions

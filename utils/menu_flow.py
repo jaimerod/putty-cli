@@ -17,7 +17,7 @@ from .clipboard_util import copy_command
 from .display_util import generate_menu_items
 from .net_util import run_ping
 from .ppk_convert_util import ppk_cache_dir
-from .putty_parse_util import file_stamp, parse_putty_reg
+from .putty_parse_util import file_stamp, parse_putty_reg_cached
 from .recent_sessions_util import (
     load_recent_entries,
     load_recent_sessions,
@@ -300,7 +300,7 @@ def run_menu_flow(
         current_stamp = file_stamp(reg_path)
         if reg_stamp is not None and current_stamp != reg_stamp:
             try:
-                reloaded = parse_putty_reg(reg_path)
+                reloaded = parse_putty_reg_cached(reg_path)
                 usable = usable_sessions(reloaded,
                                         include_archived=include_archived)
                 recent_sessions = load_recent_sessions(recent_file, usable)
