@@ -1914,7 +1914,8 @@ class TestEditModal:
                 == (box.region.x + 2, box.region.y + 1)
             assert str(shadow.content)
 
-    async def test_browse_picks_key_file(self, tmp_path):
+    async def test_browse_picks_key_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
         """The Key row's Browse button opens the FAR file panel; picking
         a .ppk next to the .reg stores the bare (portable) filename."""
         from utils.tui_actions import KeyPickerModal
@@ -1951,7 +1952,71 @@ class TestEditModal:
             assert modal.query_one("#edit-PublicKeyFile",
                                    Input).value == "pickme.ppk"
 
-    async def test_key_picker_navigates_and_cancels(self, tmp_path):
+    async def test_picker_starts_in_ssh_dir_by_default(self, tmp_path,
+                                                        monkeypatch):
+        """An empty key field opens the picker in ~/.ssh (where keys
+        overwhelmingly live), not the .reg's directory."""
+        from utils.tui_actions import KeyPickerModal
+        home = tmp_path / "fake-home"
+        (home / ".ssh").mkdir(parents=True)
+        (home / ".ssh" / "sshkey.ppk").write_text("PPKFILE")
+        monkeypatch.setenv("HOME", str(home))
+        app, _reg = self._setup(tmp_path)   # reg lives elsewhere
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            await pilot.click(".far-row .far-btn")     # Browse
+            for _ in range(2):
+                await pilot.pause()
+            picker = app.screen
+            assert isinstance(picker, KeyPickerModal)
+            assert picker._dir == home / ".ssh"
+            view = picker.query_one("#key-list", ListView)
+            row_texts = [str(item.query_one(Static).content)
+                         for item in view.children]
+            assert "sshkey.ppk" in row_texts
+            view.index = row_texts.index("sshkey.ppk")
+            await pilot.press("enter")
+            for _ in range(3):
+                await pilot.pause()
+            assert app.screen is modal
+            # outside the .reg dir: stored as the absolute path
+            assert modal.query_one("#edit-PublicKeyFile",
+                                   Input).value == str(home / ".ssh" / "sshkey.ppk")
+
+    async def test_dot_directories_are_navigable(self, tmp_path,
+                                                 monkeypatch):
+        """Hidden folders (.ssh!) must be visible and enterable."""
+        monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
+        app, _reg = self._setup(tmp_path)
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / ".hidden" / "nested.ppk").write_text("PPKFILE")
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app._open_edit_modal(self.NAME)
+            for _ in range(3):
+                await pilot.pause()
+            await pilot.click(".far-row .far-btn")
+            await pilot.pause()
+            picker = app.screen
+            view = picker.query_one("#key-list", ListView)
+            row_texts = [str(item.query_one(Static).content)
+                         for item in view.children]
+            assert ".hidden/" in row_texts
+            view.index = row_texts.index(".hidden/")
+            await pilot.press("enter")
+            for _ in range(2):
+                await pilot.pause()
+            hidden_texts = [str(item.query_one(Static).content)
+                            for item in view.children]
+            assert "nested.ppk" in hidden_texts
+            assert picker._dir == tmp_path / ".hidden"
+
+    async def test_key_picker_navigates_and_cancels(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
         from utils.tui_actions import KeyPickerModal
         app, _reg = self._setup(tmp_path)
         (tmp_path / "keys").mkdir()

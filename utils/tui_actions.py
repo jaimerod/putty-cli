@@ -258,8 +258,8 @@ class KeyPickerModal(FarDialogScreen[Optional[str]]):
             view.append(ListItem(Static("(unreadable)", markup=False)))
         else:
             for p in entries:
-                if p.name.startswith("."):
-                    continue
+                # NO dot-skip: hidden directories (.ssh!) must stay
+                # navigable, and a hidden .ppk is still a key file
                 if p.is_dir():
                     self._paths.append(p)
                     view.append(ListItem(Static(p.name + "/",
@@ -456,9 +456,15 @@ class EditSessionModal(FarDialogScreen):
     async def action_pick_key(self) -> None:
         """Open the FAR key-file picker for the Key (.ppk) field; the
         picked path is stored in PuTTY-and-putty-cli friendly form."""
-        start = browsable_key_dir(
-            self.query_one("#edit-PublicKeyFile", Input).value,
-            self._reg_dir) or Path.home()
+        value = self.query_one("#edit-PublicKeyFile", Input).value
+        ssh_dir = Path.home() / ".ssh"
+        start = browsable_key_dir(value, self._reg_dir)
+        if not value.strip():
+            # no key yet: keys overwhelmingly live in ~/.ssh
+            start = ssh_dir if ssh_dir.is_dir() else (
+                self._reg_dir or ssh_dir)
+        if start is None or not start.is_dir():
+            start = ssh_dir if ssh_dir.is_dir() else Path.home()
 
         def on_result(picked: Optional[str]) -> None:
             if picked:
