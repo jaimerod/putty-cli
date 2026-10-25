@@ -606,17 +606,26 @@ class PingModal(FarDialogScreen):
 
 
 ANSI_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"   # CSI sequences (SGR colors, cursor...)
-    r"|\x1b\][^\x07\x1b]*(\x07|\x1b\\)?"  # OSC (title, clipboard...)
-    r"|\x1b[@-Z\\-_]"               # other C1 escapes
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"          # CSI sequences (SGR, cursor...)
+    r"|\x1b\][^\x07\x1b\n]*(\x07|\x1b\\)?"  # OSC (title, clipboard...)
+    r"|\x1b[Pk][^\x07\x1b\n]*(\x07|\x1b\\)?"  # DCS / tmux+screen titles
+    r"|\x1b[@-Z\\-_]"                     # other two-char escapes
+    r"|\x1b."                            # catch-all: any other ESC pair
 )
 
 
 def _strip_ansi(text: str) -> str:
     """tmux pipe-pane captures raw terminal bytes incl. SGR/OSC escape
     sequences and CR-overwrites; they render as garbage in the log
-    view, so scrub them and collapse \r-carriage returns."""
-    return ANSI_RE.sub("", text.replace("\r\n", "\n")).replace("\r", "")
+    view - worse, stray ESC bytes painted as cells are INTERPRETED by
+    the terminal, corrupting the window chrome. Robust by
+    construction: known sequence families are removed whole (CSI, OSC,
+    DCS, tmux/screen window titles), a catch-all eats any other ESC
+    pair, and a final scrub drops leftover C0 control bytes (BEL, BS,
+    ...) that would otherwise break the render. Tabs and newlines
+    survive."""
+    text = ANSI_RE.sub("", text.replace("\r\n", "\n")).replace("\r", "")
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 
 
 class LogModal(KeyBarOwner, ModalScreen[None]):

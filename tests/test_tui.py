@@ -2709,3 +2709,50 @@ class TestCreateFlow:
             assert "no .reg file to edit" in app.status_message
             from utils.tui_actions import EditSessionModal
             assert not isinstance(app.screen, EditSessionModal)
+
+
+class TestAnsiScrub:
+    """The log scrubber must remove EVERYTHING the terminal would
+    interpret: a stray ESC painted as a cell corrupts the render
+    (seen in the wild: a tmux log wrecked the log-view's border)."""
+
+    def test_strips_tmux_sequences_and_c0(self):
+        """Real bytes from 2026-10-22_0201-16gb_Linux_Server.log:
+        DECSC/DECRC (ESC 7/8), tmux window titles (ESC k ... ST),
+        keyboard modes (ESC = e / ESC >), backspace and BEL."""
+        from utils.tui_actions import _strip_ansi
+        raw = ("\x1b7╭─ prompt ─\x1b8\n"
+               "╰─❯ \x1bkmy title\x1b\\\n"
+               "╰─❯ \x1b=e\x08exit\x1b>\n"
+               "line\x07bell\n"
+               "\x1b[31mred\x1b[0m plain\n")
+        out = _strip_ansi(raw)
+        assert out == ("╭─ prompt ─\n"
+                       "╰─❯ \n"
+                       "╰─❯ eexit\n"   # 'e' fragment of ESC=e survives
+                       "linebell\n"
+                       "red plain\n")
+        assert not any(ord(c) < 32 and c not in "\n\t" for c in out)
+
+    def test_unterminated_title_stops_at_line_end(self):
+        """A title escape with no terminator runs to the end of ITS
+        line (that is what a title is) but must not swallow the rest
+        of the log."""
+        from utils.tui_actions import _strip_ansi
+        out = _strip_ansi("\x1bk~# still here\nnext line\n")
+        assert "still here" not in out     # title text, consumed
+        assert "next line" in out         # the log survives
+
+    def test_real_world_log_scrubs_clean(self, tmp_path):
+        """Byte-for-byte regression: the session log whose ESC bytes
+        corrupted the log-view border scrubs to pure printable text."""
+        from utils.tui_actions import _strip_ansi
+        body = ("Welcome to Ubuntu 24.04.5 LTS\n"
+                "\x1b7╭─  ~ ────────\x1b8\n"
+                "╰─❯ \x1b=e\x08exit\x1b>\n"
+                "\x1bkexit\x1b\\Connection closed.\n")
+        (tmp_path / "wild.log").write_text(body, encoding="utf-8")
+        out = _strip_ansi((tmp_path / "wild.log").read_text(errors="replace"))
+        assert not any(ord(c) < 32 and c not in "\n\t" for c in out)
+        assert "Welcome to Ubuntu" in out
+        assert "Connection closed." in out
