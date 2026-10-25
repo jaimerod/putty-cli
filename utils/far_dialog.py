@@ -198,6 +198,17 @@ class FarFlatButton(Static, can_focus=True):
             event.stop()
             event.prevent_default()
             await self.fire_action()
+        elif event.key in ("left", "right"):
+            # arrow through the button group (FAR/DOS dialog style: the
+            # button row behaves like a radio cluster, wrapping at the
+            # ends so left/right always toggle between the buttons)
+            event.stop()
+            event.prevent_default()
+            group = [w for w in (self.parent.children if self.parent
+                                 else ()) if isinstance(w, FarFlatButton)]
+            if group:
+                step = 1 if event.key == "right" else -1
+                group[(group.index(self) + step) % len(group)].focus()
 
     async def fire_action(self) -> None:
         await self.run_action(self._action)

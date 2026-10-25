@@ -2756,3 +2756,60 @@ class TestAnsiScrub:
         assert not any(ord(c) < 32 and c not in "\n\t" for c in out)
         assert "Welcome to Ubuntu" in out
         assert "Connection closed." in out
+
+
+class TestButtonGroupArrows:
+    """Left/right toggle within a dialog's button group (Save/Cancel,
+    Cancel/Delete) like a FAR/DOS radio cluster."""
+
+    async def test_arrows_toggle_save_cancel(self, tmp_path):
+        from utils.tui_actions import EditSessionModal
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.push_screen(EditSessionModal("solo", {"HostName": "h"}))
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            save, cancel = list(modal.query("#far-buttons .far-btn"))
+            save.focus()
+            await pilot.pause()
+            assert app.focused is save
+            await pilot.press("right")
+            await pilot.pause()
+            assert app.focused is cancel
+            await pilot.press("left")            # back to Save
+            await pilot.pause()
+            assert app.focused is save
+            await pilot.press("left")            # wraps to Cancel
+            await pilot.pause()
+            assert app.focused is cancel
+            await pilot.press("right")           # wraps to Save
+            await pilot.pause()
+            assert app.focused is save
+
+    async def test_enter_on_arrow_focused_button_fires(self, tmp_path):
+        """Arrow to the other button, Enter: the RIGHT action fires."""
+        from utils.tui_actions import DeleteConfirmModal
+        app = SessionBrowser({"solo": {"HostName": "h"}}, [], {}, None)
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            await app.push_screen(DeleteConfirmModal("solo", host="h"))
+            for _ in range(3):
+                await pilot.pause()
+            modal = app.screen
+            cancel_btn, delete_btn = list(modal.query("#far-buttons .far-btn"))
+            delete_btn.focus()
+            await pilot.pause()
+            assert app.focused is delete_btn
+            await pilot.press("left")            # over to Cancel
+            await pilot.pause()
+            assert app.focused is cancel_btn
+            await pilot.press("right")           # back to Delete
+            await pilot.pause()
+            assert app.focused is delete_btn
+            results = []
+            modal.dismiss = lambda v: results.append(v)  # type: ignore
+            await pilot.press("enter")
+            await pilot.pause()
+            assert results == [{"delete": True}]
