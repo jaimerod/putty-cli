@@ -341,10 +341,19 @@ def _wrap_tmux(
 
     in_tmux = bool(os.environ.get("TMUX"))
     name = safe_name(session_name)
+    # wheel-scrolling works only with tmux mouse mode: the pane lives
+    # on the alternate screen (no terminal scrollback), so without it
+    # scroll-up/down does nothing inside the session. Mouse mode
+    # takes over click-drag text selection too - $PUTTY_TMUX_MOUSE=off
+    # restores the old behavior for users who prefer native selection.
+    mouse_cmd = [] if os.environ.get(
+        "PUTTY_TMUX_MOUSE", "on").strip().lower() in ("0", "off", "false", "no") \
+        else ["set-option", "mouse", "on", ";"]
     argv = ["tmux"]
     if in_tmux:
         argv += ["new-window", "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";"]
+        argv += mouse_cmd
     else:
         # new-session REFUSES a duplicate -s name (two sessions that
         # flatten to the same safe_name would collide), so -s gets a
@@ -355,5 +364,6 @@ def _wrap_tmux(
         argv += ["new-session", "-s", session_name_arg, "-n", name,
                  " ".join(shlex.quote(a) for a in parts), ";",
                  "set-option", "destroy-unattached", "on", ";"]
+        argv += mouse_cmd
     argv += ["pipe-pane", "-o", f"cat >> {shlex.quote(log_file)}"]
     return argv

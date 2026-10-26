@@ -941,7 +941,10 @@ class TestMoshAndExtraArgs:
             "s", {"HostName": "h"}, reg_path=tmp_path / "r.reg", tmux=True,
         )
         assert argv[1] == "new-window"
-        assert "set-option" not in argv  # window needs no destroy-unattached
+        # window needs no destroy-unattached; mouse IS set (scrolling)
+        assert "destroy-unattached" not in argv
+        mo = argv.index("set-option")
+        assert argv[mo:mo + 3] == ["set-option", "mouse", "on"]
         pp_idx = argv.index("pipe-pane")
         assert argv[pp_idx + 1] == "-o"          # targetless (dot-safe)
         assert argv[pp_idx + 2].startswith("cat >> ")
@@ -962,6 +965,30 @@ class TestMoshAndExtraArgs:
         assert "rodriguez-jr.com" in argv[argv.index("-s") + 1
                                          if "-s" in argv else
                                          argv.index("-n") + 1]
+
+    def test_wrap_tmux_enables_mouse(self, tmp_path, monkeypatch):
+        """Wheel-scrolling only works with tmux mouse mode (the pane
+        lives on the alternate screen: no terminal scrollback)."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.delenv("TMUX", raising=False)
+        monkeypatch.delenv("PUTTY_TMUX_MOUSE", raising=False)
+        argv, _ = build_ssh_command(
+            "s", {"HostName": "h"}, reg_path=tmp_path / "r.reg", tmux=True,
+        )
+        mo = argv.index("mouse")
+        assert argv[mo - 1:mo + 2] == ["set-option", "mouse", "on"]
+        assert mo < argv.index("pipe-pane")
+
+    def test_wrap_tmux_mouse_env_override(self, tmp_path, monkeypatch):
+        """$PUTTY_TMUX_MOUSE=off restores native terminal selection
+        behavior (mouse mode takes over click-drag)."""
+        monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
+        monkeypatch.delenv("TMUX", raising=False)
+        monkeypatch.setenv("PUTTY_TMUX_MOUSE", "off")
+        argv, _ = build_ssh_command(
+            "s", {"HostName": "h"}, reg_path=tmp_path / "r.reg", tmux=True,
+        )
+        assert "mouse" not in argv
 
     def test_mosh_basic(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PUTTY_LOG_DIR", str(tmp_path / "logs"))
