@@ -5,7 +5,6 @@ These were previously reachable only through integration paths
 directly testable - no monkeypatching of subprocess/time required.
 """
 import collections
-
 import shutil
 from pathlib import Path
 
@@ -23,7 +22,10 @@ from utils.session_util import (
     usable_sessions,
 )
 from utils.ssh_command_util import (
-    _plan_mosh, _plan_ssh, browsable_key_dir, reg_friendly_path,
+    _plan_mosh,
+    _plan_ssh,
+    browsable_key_dir,
+    reg_friendly_path,
 )
 
 # ── net_util.interpret_ping_output ───────────────────────────────────────────
@@ -319,6 +321,7 @@ class TestRunJumpProbe:
 
     def test_nonzero_exit_quotes_last_stderr_line(self, monkeypatch):
         import subprocess as sp
+
         import utils.net_util as mod
         monkeypatch.setattr(
             mod.subprocess, "run",
@@ -332,6 +335,7 @@ class TestRunJumpProbe:
 
     def test_nonzero_exit_empty_output_shows_exit_code(self, monkeypatch):
         import subprocess as sp
+
         import utils.net_util as mod
         monkeypatch.setattr(
             mod.subprocess, "run",
@@ -349,6 +353,7 @@ class TestRunJumpProbe:
 
     def test_timeout(self, monkeypatch):
         import subprocess as sp
+
         import utils.net_util as mod
         monkeypatch.setattr(
             mod.subprocess, "run",

@@ -95,7 +95,7 @@ def run_jump_probe(argv: List[str], jump: str) -> Tuple[bool, str]:
         return False, f"unreachable via {jump} ({e})"
     if proc.returncode == 0:
         return True, f"reachable via {jump}"
-    lines = [l for l in (proc.stderr or "").splitlines() if l.strip()] \
-        or [l for l in (proc.stdout or "").splitlines() if l.strip()]
+    lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()] \
+        or [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
     detail = lines[-1] if lines else f"ssh exit {proc.returncode}"
     return False, f"unreachable via {jump} ({detail})"

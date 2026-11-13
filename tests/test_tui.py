@@ -302,8 +302,8 @@ class TestTuiActions:
     def test_run_ping_unpermitted_caps_falls_back_to_tcp(self, monkeypatch):
         import subprocess as sp
 
-        import utils.net_util as nmod
         import utils.net_util as mod
+        import utils.net_util as nmod
         monkeypatch.setattr(
             mod.shutil, "which", lambda name: "/usr/bin/ping")
         monkeypatch.setattr(sp, "run", lambda *a, **k: sp.CompletedProcess(
@@ -1163,9 +1163,9 @@ class TestBrowserApp:
         """p: FAR ping dialog; the result mirrors into the status line
         when the probe lands; Esc closes."""
         import utils.tui_actions as mod
+        from utils.far_dialog import FarValueField
         from utils.far_style import FARKeyBar
         from utils.tui_actions import PingModal
-        from utils.far_dialog import FarValueField
         monkeypatch.setattr(mod, "run_ping",
                             lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(
@@ -1195,8 +1195,8 @@ class TestBrowserApp:
         """A jump-hosted session is probed THROUGH the jump (the real
         ssh path); a failed probe carries the jump host in the message."""
         import utils.net_util as nmod
-        from utils.tui_actions import PingModal
         from utils.far_dialog import FarValueField
+        from utils.tui_actions import PingModal
         monkeypatch.setattr(nmod, "run_jump_probe",
                             lambda argv, jump: (
                                 False, f"192.0.2.9: unreachable via {jump}"))
@@ -1439,8 +1439,8 @@ class TestSessionActionMenu:
     async def test_right_click_ping_dispatch(self, monkeypatch):
         """right-click -> down/enter to Ping -> the FAR ping dialog."""
         import utils.tui_actions as mod
-        from utils.tui_actions import PingModal
         from utils.far_dialog import FarValueField
+        from utils.tui_actions import PingModal
         monkeypatch.setattr(mod, "run_ping",
                             lambda h, p: (False, f"{h}: down"))
         app = SessionBrowser(

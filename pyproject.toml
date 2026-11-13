@@ -7,7 +7,7 @@ name = "putty-cli"
 version = "1.0.0"
 description = "PuTTY .reg export -> fuzzy menu -> native ssh, with .ppk conversion, tmux logging and jump-host support"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Jaime" }]
 dependencies = [
@@ -52,7 +52,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "S"]

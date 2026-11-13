@@ -18,7 +18,7 @@ widget modules; custom widget classes' DEFAULT_CSS is unreliable in
 this setup, so all FAR styling is exposed as CSS constants to be
 embedded in the app's CSS.
 """
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 from textual import events
 from textual.containers import Horizontal, Vertical
@@ -272,6 +272,11 @@ class KeyBarOwner:
 
     _set_keybar(entries) is safe before mount (no-op). Slot clicks run
     the screen-namespace action mapped on the slot (action_<name>)."""
+
+    # provided by the Screen/App this is mixed into (annotation only, so
+    # nothing here shadows the real methods in the MRO)
+    query_one: Any
+    run_action: Any
 
     def _set_keybar(self, entries: Sequence[Tuple]) -> None:
         try:

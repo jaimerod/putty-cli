@@ -1,20 +1,60 @@
+backports-asyncio-runner==1.2.0 ; python_full_version < '3.11'
+    # via pytest-asyncio
+colorama==0.4.6 ; sys_platform == 'win32'
+    # via pytest
 coverage==7.16.2
     # via pytest-cov
+exceptiongroup==1.3.1 ; python_full_version < '3.11'
+    # via pytest
 iniconfig==2.3.1
     # via pytest
+linkify-it-py==2.2.0
+    # via markdown-it-py
+markdown-it-py==4.3.0
+    # via
+    #   mdit-py-plugins
+    #   rich
+    #   textual
+mdit-py-plugins==0.7.0
+    # via textual
+mdurl==0.1.2
+    # via markdown-it-py
 packaging==26.3
     # via pytest
+platformdirs==4.12.4 ; python_full_version < '3.11'
+    # via textual
+platformdirs==4.14.5 ; python_full_version >= '3.11'
+    # via textual
 pluggy==1.6.0
     # via
     #   pytest
     #   pytest-cov
 pygments==2.21.0
-    # via pytest
+    # via
+    #   pytest
+    #   rich
+    #   textual
 pytest==9.1.1
     # via
     #   -r requirements.txt
+    #   pytest-asyncio
     #   pytest-cov
+pytest-asyncio==1.5.0
+    # via -r requirements.txt
 pytest-cov==7.1.0
     # via -r requirements.txt
+rich==15.0.0
+    # via textual
 simple-term-menu==1.6.6
     # via -r requirements.txt
+textual==8.2.8
+    # via -r requirements.txt
+tomli==2.5.0 ; python_full_version <= '3.11'
+    # via
+    #   coverage
+    #   pytest
+typing-extensions==4.16.0
+    # via
+    #   exceptiongroup
+    #   pytest-asyncio
+    #   textual
