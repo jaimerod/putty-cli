@@ -5,6 +5,15 @@ menu, and connects with native `ssh` — including `.ppk` key conversion,
 jump-host proxies, mosh, remote commands, tmux session logging, and a
 scriptable CLI.
 
+![Animated demo of the session browser](assets/demo.gif)
+
+The demo shows seeded recent sessions, the edit dialog, ping, and a sample
+log. It uses 99 synthetic `.example` sessions and
+[OverTheWire Bandit 0](https://overthewire.org/wargames/bandit/bandit0.html)
+as a public SSH configuration example. The ping result is simulated, the
+log is sample output, and no SSH connection is made. The temporary
+registry is not included.
+
 ## Requirements
 
 - Linux or WSL
