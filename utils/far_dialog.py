@@ -224,7 +224,8 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
     max_box_width: Optional[int] = None
     #: caption rendered centered inside the box's top border row
     #: (the FAR.exe dialog-title look; empty = no caption)
-    TITLE: str = ""
+    # set per instance by subclasses (Screen declares it a ClassVar)
+    TITLE: str = ""  # type: ignore[misc]
     #: (label, screen-namespaced action) rendered inside the box
     BUTTONS: List[Tuple[str, str]] = []
     #: css class of the widget to focus after mount (defaults to the
@@ -485,6 +486,6 @@ class FarDialogScreen(ModalScreen[DismissType], Generic[DismissType]):
                 for w in self.query(".far-btn"):
                     w.focus()
                     break
-        except Exception:  # noqa: BLE001 - selector may not exist
+        except Exception:  # noqa: BLE001 # nosec B110 - selector may not exist
             pass
         self.call_after_refresh(self._sync_shadow)

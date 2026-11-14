@@ -29,8 +29,8 @@ from utils.menu_flow import (  # noqa: F401 - re-exported for tests/back-compat
 from utils.putty_parse_util import (  # noqa: F401 - re-exported for tests
     file_stamp,
     parse_putty_reg,
+    parse_putty_reg_cached,
 )
-from utils.putty_parse_util import parse_putty_reg_cached
 from utils.recent_sessions_util import load_recent_entries, load_recent_sessions
 from utils.session_util import usable_sessions  # noqa: F401
 

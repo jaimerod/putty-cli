@@ -57,7 +57,7 @@ def test_modal_paints_once_centered(tmp_path):
             os.dup2(slave, 2)
             os.close(master)
             os.chdir(REPO)
-            os.execve(sys.executable, [sys.executable, "putty.py"], env)
+            os.execve(sys.executable, [sys.executable, "putty.py"], env)  # noqa: S606
         except Exception:
             pass
         os._exit(1)

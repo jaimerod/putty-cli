@@ -13,7 +13,10 @@ import pytest
 import putty
 from utils import menu_flow
 from utils.display_util import (
-    generate_menu_items, make_display_pair, separator, separator_term,
+    generate_menu_items,
+    make_display_pair,
+    separator,
+    separator_term,
 )
 from utils.ppk_convert_util import convert_ppk_to_openssh
 from utils.putty_parse_util import parse_putty_reg

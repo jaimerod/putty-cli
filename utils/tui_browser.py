@@ -755,7 +755,7 @@ class SessionBrowser(KeyBarOwner, App[int]):
         values = detail_values(
             row.name, self.usable[row.name], self.reg_path)
         detail.query_one("#detail-command", Static).update(values["command"])
-        for field, (_, key) in zip(fields, DETAIL_FIELDS):
+        for field, (_, key) in zip(fields, DETAIL_FIELDS, strict=True):
             field.value = values[key]
 
     def check_action(self, action: str, parameters: tuple) -> bool:

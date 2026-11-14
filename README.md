@@ -17,7 +17,7 @@ registry is not included.
 ## Requirements
 
 - Linux or WSL
-- `python3` (3.9+) with a venv
+- `python3` (3.10+) with a venv
 - `openssh-client`; `tmux` recommended (falls back to plain ssh without it)
 - `putty-tools` (`sudo apt install putty-tools`) — only for sessions with `.ppk` keys
 - Optional: `fzf` (richer picker with live preview), `mosh` (for mosh sessions)
@@ -168,7 +168,7 @@ ruff check .
 bandit -c pyproject.toml -r utils putty.py
 ```
 
-CI (GitHub Actions) runs the suite on Python 3.9/3.12 with puttygen/tmux,
+CI (GitHub Actions) runs the suite on Python 3.10/3.12 with puttygen/tmux,
 with a 90% coverage gate, mypy, ruff and bandit.
 
 The test suite covers the reg parser (all encodings), menu display and tag

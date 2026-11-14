@@ -13,7 +13,10 @@ from textual.widgets import Input, ListItem, ListView, RichLog, Rule, Static
 
 from .clipboard_util import copy_command
 from .far_dialog import (
-    FarCloseButton, FarDialogScreen, FarFlatButton, FarValueField,
+    FarCloseButton,
+    FarDialogScreen,
+    FarFlatButton,
+    FarValueField,
     underlying_browser_screen,
 )
 from .far_style import ACTIVE_PALETTE, FARKeyBar, KeyBarOwner
@@ -440,7 +443,7 @@ class EditSessionModal(FarDialogScreen):
                     "values": dict(values)}
 
         rename_to = None
-        if name != unquote_display(self.session_name):
+        if name != unquote_display(self.session_name or ""):
             rename_to = name
         # only fields that actually differ become .reg lines
         changes = {
@@ -516,10 +519,13 @@ class LogPickerModal(FarDialogScreen[Optional[Path]]):
 
     def compose_body(self):
         from .logs_util import format_log_line
-        yield ListView(id="log-list", *[
-            ListItem(Static(format_log_line(*entry), markup=False))
-            for entry in self.entries
-        ])
+        yield ListView(
+            *[
+                ListItem(Static(format_log_line(*entry), markup=False))
+                for entry in self.entries
+            ],
+            id="log-list",
+        )
 
     def on_list_view_selected(self, event: "ListView.Selected") -> None:
         try:

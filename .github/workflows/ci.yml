@@ -9,12 +9,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.9", "3.12"]
+        python: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
 
@@ -30,14 +31,16 @@ jobs:
         run: pytest --cov=utils --cov=putty --cov-report=term --cov-fail-under=90
 
       - name: Mypy
-        run: mypy utils putty.py
+        run: |
+          pip install mypy
+          mypy utils putty.py
         if: matrix.python == '3.12'
 
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install ruff bandit
